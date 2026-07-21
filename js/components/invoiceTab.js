@@ -357,7 +357,7 @@ function renderRevisions() {
       (rev) => `
       <div class="revision-item">
         <div class="revision-item-main">
-          <div class="revision-item-title">Revision ${rev.revisionNumber}</div>
+          <div class="revision-item-title">Revision ${displayRevisionNumber(rev.revisionNumber)}</div>
           <div class="revision-item-sub">${formatDateTime(rev.createdAt)}</div>
         </div>
         <div class="revision-item-actions">
@@ -647,7 +647,7 @@ function renderImportResults(host, groups, dialog) {
             (rev) => `
             <div class="revision-item">
               <div class="revision-item-main">
-                <div class="revision-item-title">Revision ${rev.revisionNumber}</div>
+                <div class="revision-item-title">Revision ${displayRevisionNumber(rev.revisionNumber)}</div>
                 <div class="revision-item-sub">${formatDateTime(rev.createdAt)}</div>
               </div>
               <div class="revision-item-actions">
@@ -681,6 +681,15 @@ function renderImportResults(host, groups, dialog) {
       }
     });
   });
+}
+
+// The database's revision_number counts from 1 (so MAX(revision_number)+1
+// numbering in insert_invoice_revision() has no off-by-one — see
+// DATABASE.md), but staff read a brand-new invoice's first save as
+// "Revision 0", matching what pdfGenerator.js already prints on the PDF
+// itself — see the displayRevision comment there.
+function displayRevisionNumber(revisionNumber) {
+  return revisionNumber - 1;
 }
 
 // ---------------------------------------------------------------------------
