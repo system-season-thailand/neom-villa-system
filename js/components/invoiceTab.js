@@ -2,12 +2,12 @@ import * as invoiceService from '../services/invoiceService.js';
 import * as settingsService from '../services/settingsService.js';
 import { toast } from './toast.js';
 import { openModal } from './modal.js';
+import { createDatePicker } from './datePicker.js';
 import { addDays, formatDisplayDate, formatDateTime, todayISO } from '../utils/dateUtils.js';
 import { formatIDR, formatNumber } from '../utils/format.js';
 import { generateInvoicePdf } from '../utils/pdfGenerator.js';
 import { validateGuestName, validateCheckIn, validateNights, validateVillaType } from '../utils/validators.js';
 
-const PRIVATE_GUEST_LABEL = 'عميل خاص';
 const VILLA_TYPES = ['3 Bedroom Villa', '2 Bedroom Villa'];
 const ADD_NEW_GUEST_BY_VALUE = '__add_new__';
 
@@ -19,6 +19,9 @@ let pricingDebounce = null;
 // resets — it's a shared list, not per-invoice data, and re-fetching it on
 // every new invoice would be wasteful.
 let guestByOptions = [];
+// Created once at mount and reused across resets — same reasoning as
+// guestByOptions above (the picker instance itself isn't per-invoice state).
+let checkInPicker = null;
 
 function blankState() {
   return {
@@ -43,6 +46,16 @@ function blankState() {
 export function mount(container) {
   container.innerHTML = template();
   cacheEls(container);
+  checkInPicker = createDatePicker({
+    // No disabledDates — unlike the Prices tab's pickers, nothing about an
+    // invoice's check-in date is ever off-limits, including past dates.
+    onChange: (value) => {
+      state.checkInDate = value;
+      clearFieldError('checkInDate');
+      updateCheckOutAndPricing();
+    }
+  });
+  els.checkInSlot.appendChild(checkInPicker.trigger);
   bindEvents();
   state = blankState();
   syncFormFromState();
@@ -57,9 +70,8 @@ function cacheEls(container) {
     guestName: container.querySelector('#guest-name'),
     errGuestName: container.querySelector('#err-guest-name'),
     fieldGuestName: container.querySelector('#field-guest-name'),
-    chipPrivateGuest: container.querySelector('#chip-private-guest'),
     guestBy: container.querySelector('#guest-by'),
-    checkIn: container.querySelector('#check-in'),
+    checkInSlot: container.querySelector('#check-in-slot'),
     errCheckIn: container.querySelector('#err-check-in'),
     fieldCheckIn: container.querySelector('#field-check-in'),
     nights: container.querySelector('#nights'),
@@ -75,12 +87,6 @@ function cacheEls(container) {
 }
 
 function bindEvents() {
-  els.chipPrivateGuest.addEventListener('click', () => {
-    els.guestName.value = PRIVATE_GUEST_LABEL;
-    state.guestName = PRIVATE_GUEST_LABEL;
-    clearFieldError('guestName');
-  });
-
   els.guestName.addEventListener('input', () => {
     state.guestName = els.guestName.value;
     clearFieldError('guestName');
@@ -92,12 +98,6 @@ function bindEvents() {
       return;
     }
     state.guestBy = els.guestBy.value;
-  });
-
-  els.checkIn.addEventListener('change', () => {
-    state.checkInDate = els.checkIn.value;
-    clearFieldError('checkInDate');
-    updateCheckOutAndPricing();
   });
 
   els.nights.addEventListener('input', () => {
@@ -176,7 +176,7 @@ function syncFormFromState() {
     : state.invoiceNumber || '—';
   els.guestName.value = state.guestName;
   renderGuestBySelect();
-  els.checkIn.value = state.checkInDate;
+  checkInPicker.setValue(state.checkInDate);
   els.nights.value = state.nights;
   els.villaType.value = state.villaType;
   els.checkOut.value = currentCheckOut() ? formatDisplayDate(currentCheckOut()) : '';
@@ -315,11 +315,11 @@ function renderPricing() {
     .map(
       (row) => `
       <tr>
-        <td>${row.nights === 1 ? formatDisplayDate(row.startDate) : `${formatDisplayDate(row.startDate)} – ${formatDisplayDate(row.endDate)}`}</td>
-        <td>${escapeHtml(row.seasonNote || '—')}</td>
-        <td class="text-right num">${row.nights}</td>
-        <td class="text-right num">${formatNumber(row.pricePerNight)}</td>
-        <td class="text-right num">${formatNumber(row.subtotal)}</td>
+        <td data-label="Period">${row.nights === 1 ? formatDisplayDate(row.startDate) : `${formatDisplayDate(row.startDate)} – ${formatDisplayDate(row.endDate)}`}</td>
+        <td data-label="Season">${escapeHtml(row.seasonNote || '—')}</td>
+        <td class="text-right num" data-label="Nights">${row.nights}</td>
+        <td class="text-right num" data-label="Rate / Night">${formatNumber(row.pricePerNight)}</td>
+        <td class="text-right num" data-label="Amount">${formatNumber(row.subtotal)}</td>
       </tr>`
     )
     .join('');
@@ -332,7 +332,7 @@ function renderPricing() {
         </thead>
         <tbody>${rowsHtml}</tbody>
         <tfoot>
-          <tr><td colspan="4">Total</td><td class="text-right">${formatIDR(total)}</td></tr>
+          <tr><td colspan="4" class="pricing-total-label">Total</td><td class="text-right" data-label="Total">${formatIDR(total)}</td></tr>
         </tfoot>
       </table>
     </div>
@@ -715,9 +715,6 @@ function template() {
             <div class="field" id="field-guest-name">
               <label class="field-label" for="guest-name">Guest Name <span class="required">*</span></label>
               <input class="input" id="guest-name" type="text" placeholder="Type guest name" autocomplete="off" />
-              <div class="chip-row">
-                <button type="button" class="chip arabic-text" id="chip-private-guest">عميل خاص</button>
-              </div>
               <div class="field-error" id="err-guest-name"></div>
             </div>
 
@@ -730,7 +727,7 @@ function template() {
             <div class="field-row">
               <div class="field" id="field-check-in">
                 <label class="field-label" for="check-in">Check-in Date <span class="required">*</span></label>
-                <input class="input" id="check-in" type="date" />
+                <div id="check-in-slot"></div>
                 <div class="field-error" id="err-check-in"></div>
               </div>
               <div class="field" id="field-nights">

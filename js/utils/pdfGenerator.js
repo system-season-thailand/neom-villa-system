@@ -266,8 +266,10 @@ export async function generateInvoicePdf(invoice) {
     },
     bodyStyles: { lineWidth: { bottom: 0.2 } },
     columnStyles: {
-      2: { halign: 'right', cellWidth: 18 },
-      3: { halign: 'right', cellWidth: 34 },
+      0: { halign: 'left' },
+      1: { halign: 'center' },
+      2: { halign: 'center', cellWidth: 18 },
+      3: { halign: 'center', cellWidth: 34 },
       4: { halign: 'right', cellWidth: 34, fontStyle: 'bold' }
     },
     // Arabic season notes: suppress autoTable's own text draw and stash a

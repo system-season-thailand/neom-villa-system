@@ -7,7 +7,7 @@ const TABLE = 'neom_availability';
 export const STATUSES = {
   available: { label: 'Available', color: '#1a7f5a' },
   booked: { label: 'Booked', color: '#c1402c' },
-  on_hold: { label: 'On Hold', color: '#7c5cbf' },
+  on_hold: { label: 'On Hold', color: '#d9730d' },
   blocked: { label: 'Blocked', color: '#454b56' },
   passed: { label: 'Passed', color: '#aeb2ba' }
 };

@@ -61,7 +61,7 @@
 .calendar-cell {
   position: relative;
   min-width: 0;
-  min-height: 78px;
+  min-height: 84px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-0);
@@ -76,6 +76,12 @@
 .calendar-cell.is-empty {
   border: none;
   background: transparent;
+}
+/* These cells only exist to pad the grid out to full weeks — the number is
+   the adjacent month's date, not this month's, so showing it invites
+   misreading it as a real day in the visible month. */
+.calendar-cell.is-empty .cell-date {
+  visibility: hidden;
 }
 
 .calendar-cell.is-editable {
@@ -125,9 +131,12 @@
   font-size: 11px;
   font-weight: 700;
   color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wraps instead of truncating — "IDR 2.000.000" is too wide to guarantee
+     on one line at every column width the 7-day grid can produce, and the
+     cell's own min-height (below) is sized to fit the wrapped result rather
+     than shrinking this text to make it fit. */
+  white-space: normal;
+  word-break: break-word;
 }
 
 .cell-price.cell-price--missing {
@@ -358,9 +367,11 @@
 
   /* Read-only (User role) calendar also shows a price line per date, so it
      gets a little extra cell height back from the space the status label
-     and note give up above (dot instead of text, note hidden entirely). */
+     and note give up above (dot instead of text, note hidden entirely) —
+     plus enough extra to fit a price wrapped onto two lines without
+     cramping, since .cell-price no longer truncates with an ellipsis. */
   .calendar-grid--priced .calendar-cell {
-    min-height: 50px;
+    min-height: 62px;
   }
 
   .cell-price {

@@ -3,7 +3,7 @@ import { STATUSES } from '../services/availabilityService.js';
 import * as priceService from '../services/priceService.js';
 import { toast } from './toast.js';
 import { buildMonthMatrix, monthLabel, todayISO, addDays } from '../utils/dateUtils.js';
-import { formatIDR } from '../utils/format.js';
+import { formatIDRShort } from '../utils/format.js';
 
 const EDITABLE_STATUSES = ['available', 'booked', 'on_hold', 'blocked'];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -102,7 +102,7 @@ function findPriceForDate(dateISO) {
 function renderPriceLine(dateISO) {
   const rule = findPriceForDate(dateISO);
   return rule
-    ? `<span class="cell-price">${formatIDR(rule.pricePerNight)}</span>`
+    ? `<span class="cell-price">${formatIDRShort(rule.pricePerNight)}</span>`
     : `<span class="cell-price cell-price--missing">لا يوجد سعر</span>`;
 }
 
@@ -196,7 +196,7 @@ function render() {
 
   if (state.loading) {
     els.grid.innerHTML = Array.from({ length: 35 })
-      .map(() => `<div class="skeleton" style="height:78px;"></div>`)
+      .map(() => `<div class="skeleton" style="height:84px;"></div>`)
       .join('');
     return;
   }

@@ -89,7 +89,8 @@ identically if you ever move off GitHub Pages.
 │   │   ├── availabilityTab.js
 │   │   ├── loginGate.js
 │   │   ├── modal.js
-│   │   └── toast.js
+│   │   ├── toast.js
+│   │   └── datePicker.js            Shared calendar popover (Prices tab + Invoice tab's check-in)
 │   ├── state/
 │   │   └── store.js                Minimal observable store for cross-cutting state
 │   └── utils/

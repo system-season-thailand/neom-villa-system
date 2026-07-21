@@ -96,19 +96,32 @@ the only way back to a fresh blank form is downloading the current one.
    later doesn't fetch a stored file either — it re-runs `pdfGenerator.js`
    against that revision's saved data snapshot.
 
-## Pricing rule date picker
+## Custom date picker
 
-The Add/Edit Pricing Rule modal (`pricesTab.js`) doesn't use a native
-`<input type="date">` for its Start/End fields — native date pickers only
-support a min/max bound, with no way to grey out arbitrary dates in the
-middle of the range. Since the whole point of the picker is to help staff
-spot non-priced gaps at a glance, `createDatePicker()` renders its own small
-calendar popover (the same `buildMonthMatrix`/`monthLabel` helpers the
-Availability tab uses) and disables every date already covered by some
-*other* `neom_price` rule — fetched fresh via `priceService.listPrices()` at
-modal-open time rather than reused from the table's own (possibly
-search-filtered) state. The rule currently being edited, if any, is excluded
-from that disabled set so its own existing range stays selectable.
+Neither the Add/Edit Pricing Rule modal's Start/End fields (`pricesTab.js`)
+nor the Invoice tab's Check-in field (`invoiceTab.js`) use a native
+`<input type="date">` — native date pickers only support a min/max bound,
+with no way to grey out arbitrary dates in the middle of the range.
+`createDatePicker()` in `js/components/datePicker.js` — a shared UI
+component, alongside `modal.js`/`toast.js`, not owned by either tab — renders
+its own small calendar popover (the same `buildMonthMatrix`/`monthLabel`
+helpers the Availability tab uses) instead.
+
+The two call sites use it differently:
+
+- **Prices tab:** passes `disabledDates`, a set of every date already
+  covered by some *other* `neom_price` rule — fetched fresh via
+  `priceService.listPrices()` at modal-open time rather than reused from the
+  table's own (possibly search-filtered) state, and with the rule currently
+  being edited (if any) excluded so its own existing range stays selectable.
+  It reads the picked date once, via `getValue()`, when the form is saved.
+- **Invoice tab:** passes no `disabledDates` at all — every date is
+  pickable, including past ones — and an `onChange` callback instead, since
+  picking a check-in date needs to immediately recompute the check-out date
+  and re-run pricing, not just wait to be read at save time.
+
+Only one popover is ever open at a time, app-wide — `datePicker.js` tracks
+that itself and closes the previous one whenever a new one opens.
 
 ## Role gate (Admin / User)
 

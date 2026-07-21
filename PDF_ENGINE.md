@@ -72,7 +72,8 @@ The fix: stop asking jsPDF to lay out Arabic glyphs at all. Every browser's
 `<canvas>` 2D text API goes through the same real text-shaping stack as
 ordinary DOM text (HarfBuzz, DirectWrite, or CoreText depending on OS), so
 it shapes Arabic correctly by construction — the exact same engine that
-already renders the "عميل خاص" chip correctly in the app's own UI.
+already renders the "عميل خاص" option in the Guest By dropdown correctly in
+the app's own UI.
 `renderArabicToImage()` in `pdfGenerator.js` draws a given Arabic string to
 an offscreen canvas at 6× the target size (roughly 300+ effective DPI at
 normal invoice text sizes) using the **Tajawal** web font — already loaded

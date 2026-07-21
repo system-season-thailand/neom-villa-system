@@ -1,7 +1,8 @@
 import * as priceService from '../services/priceService.js';
 import { toast } from './toast.js';
 import { openModal, confirmDialog } from './modal.js';
-import { formatDisplayDate, buildMonthMatrix, monthLabel, todayISO, addDays, parseISO } from '../utils/dateUtils.js';
+import { createDatePicker, closeActiveDatePicker } from './datePicker.js';
+import { formatDisplayDate, addDays } from '../utils/dateUtils.js';
 import { formatNumber } from '../utils/format.js';
 import { validatePriceRange, validatePricePerNight } from '../utils/validators.js';
 
@@ -12,7 +13,6 @@ const SORT_COLUMNS = {
   price_per_night: 'Price / Night',
   season_note: 'Season Note'
 };
-const WEEKDAY_LETTERS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 
 let els = {};
 let state = {
@@ -23,15 +23,6 @@ let state = {
   sortDir: 'asc'
 };
 let searchDebounce = null;
-
-// Only one date-picker popover (of the two in the Add/Edit modal) is ever
-// open at a time — opening one closes the other, matching the same
-// single-popover pattern the Availability calendar uses.
-let activeDatePicker = null;
-function closeActiveDatePicker() {
-  activeDatePicker?.close();
-  activeDatePicker = null;
-}
 
 export function mount(container) {
   container.innerHTML = template();
@@ -192,115 +183,6 @@ function buildDisabledDateSet(rules, excludeId) {
   return disabled;
 }
 
-/**
- * A small inline calendar popover standing in for `<input type="date">` —
- * native date inputs have no way to grey out arbitrary dates, only a
- * min/max bound, which can't express "every date some other pricing rule
- * already covers." Mirrors the Availability tab's own month-grid popover
- * (same `buildMonthMatrix`/`monthLabel` helpers) for a consistent feel.
- */
-function createDatePicker({ value: initialValue, disabledDates }) {
-  let value = initialValue || '';
-  const refDate = value ? parseISO(value) : new Date();
-  let year = refDate.getFullYear();
-  let month = refDate.getMonth();
-  let popoverEl = null;
-
-  const trigger = document.createElement('button');
-  trigger.type = 'button';
-  trigger.className = 'input date-picker-trigger';
-  syncTriggerLabel();
-
-  trigger.addEventListener('click', (event) => {
-    event.stopPropagation();
-    if (popoverEl) close();
-    else open();
-  });
-
-  function syncTriggerLabel() {
-    trigger.textContent = value ? formatDisplayDate(value) : 'Select date';
-    trigger.classList.toggle('is-placeholder', !value);
-  }
-
-  function open() {
-    closeActiveDatePicker();
-    popoverEl = document.createElement('div');
-    popoverEl.className = 'date-picker-popover';
-    popoverEl.addEventListener('click', (event) => event.stopPropagation());
-    document.body.appendChild(popoverEl);
-    renderCalendar();
-
-    const rect = trigger.getBoundingClientRect();
-    const top = Math.min(rect.bottom + 6, window.innerHeight - popoverEl.offsetHeight - 10);
-    const left = Math.min(rect.left, window.innerWidth - popoverEl.offsetWidth - 10);
-    popoverEl.style.top = `${Math.max(10, top)}px`;
-    popoverEl.style.left = `${Math.max(10, left)}px`;
-
-    activeDatePicker = { close };
-  }
-
-  function close() {
-    popoverEl?.remove();
-    popoverEl = null;
-    if (activeDatePicker && activeDatePicker.close === close) activeDatePicker = null;
-  }
-
-  function renderCalendar() {
-    const weeks = buildMonthMatrix(year, month);
-    const today = todayISO();
-
-    popoverEl.innerHTML = `
-      <div class="date-picker-nav">
-        <button type="button" class="btn btn-icon btn-secondary btn-sm" data-nav="prev" aria-label="Previous month">‹</button>
-        <div class="date-picker-month-label">${monthLabel(year, month)}</div>
-        <button type="button" class="btn btn-icon btn-secondary btn-sm" data-nav="next" aria-label="Next month">›</button>
-      </div>
-      <div class="date-picker-grid">
-        ${WEEKDAY_LETTERS.map((w) => `<div class="date-picker-weekday">${w}</div>`).join('')}
-        ${weeks
-          .flat()
-          .map((day) => {
-            const isDisabled = !day.inCurrentMonth || disabledDates.has(day.iso);
-            const classes = ['date-picker-day'];
-            if (!day.inCurrentMonth) classes.push('is-empty');
-            if (day.iso === today) classes.push('is-today');
-            if (day.iso === value) classes.push('is-selected');
-            if (isDisabled) classes.push('is-disabled');
-            return `<button type="button" class="${classes.join(' ')}" data-date="${day.iso}" ${isDisabled ? 'disabled' : ''}>${day.day}</button>`;
-          })
-          .join('')}
-      </div>
-    `;
-
-    popoverEl.querySelectorAll('[data-nav]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        month += btn.dataset.nav === 'next' ? 1 : -1;
-        if (month < 0) {
-          month = 11;
-          year -= 1;
-        } else if (month > 11) {
-          month = 0;
-          year += 1;
-        }
-        renderCalendar();
-      });
-    });
-
-    popoverEl.querySelectorAll('.date-picker-day:not(.is-disabled):not(.is-empty)').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        value = btn.dataset.date;
-        syncTriggerLabel();
-        close();
-      });
-    });
-  }
-
-  return {
-    trigger,
-    getValue: () => value
-  };
-}
-
 async function openPriceForm(existing) {
   const isEdit = Boolean(existing);
 
@@ -357,12 +239,12 @@ async function openPriceForm(existing) {
     title: isEdit ? 'Edit Pricing Rule' : 'Add Pricing Rule',
     bodyEl: body,
     footerEl: footer,
-    onClose: () => {
-      document.removeEventListener('click', closeActiveDatePicker);
-      closeActiveDatePicker();
-    }
+    // Closing via the Escape key (handled inside modal.js) doesn't generate
+    // a document click, so an open popover needs to be force-closed here —
+    // the click-outside case is already covered by datePicker.js's own
+    // permanent listener.
+    onClose: () => closeActiveDatePicker()
   });
-  document.addEventListener('click', closeActiveDatePicker);
 
   body.querySelectorAll('.note-suggestion').forEach((btn) =>
     btn.addEventListener('click', () => {
