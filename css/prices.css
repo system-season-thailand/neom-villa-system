@@ -1,0 +1,43 @@
+.prices-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.prices-toolbar .search-box {
+  margin-bottom: 0;
+  flex: 1;
+  max-width: 320px;
+}
+
+.price-note-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.note-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.note-suggestion {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.note-suggestion:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
