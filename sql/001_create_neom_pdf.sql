@@ -64,19 +64,27 @@ CREATE TRIGGER trg_neom_pdf_updated_at
 -- Invoice numbering: a single monotonically increasing sequence, formatted
 -- as INV-<year>-<4-digit sequence>. The sequence never resets, so numbers
 -- are guaranteed sequential and never duplicated even across years.
+--
+-- The sequence is only ever advanced (nextval) from inside
+-- insert_invoice_revision() below, at the moment a brand-new invoice is
+-- actually saved — never just by loading the Invoice tab or generating a
+-- preview. Numbers used to be minted on every page load/mount, which burned
+-- one every time staff refreshed the page or imported an old invoice without
+-- ever downloading a new one, leaving permanent gaps. peek_next_invoice_number()
+-- lets the UI show what the next number *would* be without consuming it.
 -- -----------------------------------------------------------------------------
 CREATE SEQUENCE IF NOT EXISTS neom_invoice_number_seq START WITH 1 INCREMENT BY 1;
 
-CREATE OR REPLACE FUNCTION generate_invoice_number()
+DROP FUNCTION IF EXISTS generate_invoice_number();
+
+CREATE OR REPLACE FUNCTION peek_next_invoice_number()
 RETURNS text
-LANGUAGE plpgsql
+LANGUAGE sql
+STABLE
 AS $$
-DECLARE
-  v_seq bigint;
-BEGIN
-  v_seq := nextval('neom_invoice_number_seq');
-  RETURN 'INV-' || to_char(CURRENT_DATE, 'YYYY') || '-' || lpad(v_seq::text, 4, '0');
-END;
+  SELECT 'INV-' || to_char(CURRENT_DATE, 'YYYY') || '-' ||
+    lpad((last_value + CASE WHEN is_called THEN 1 ELSE 0 END)::text, 4, '0')
+  FROM neom_invoice_number_seq;
 $$;
 
 -- -----------------------------------------------------------------------------
@@ -84,6 +92,12 @@ $$;
 -- number and inserts the row in one statement, under an advisory lock keyed
 -- on the invoice number, so two staff saving the same invoice at the same
 -- moment can never collide on the same revision number.
+--
+-- p_invoice_number is nullable: pass NULL for a brand-new invoice that has
+-- never been saved before, and this function mints the real number itself
+-- (nextval) as part of the same insert — the number is only ever consumed at
+-- the moment it's actually used. Pass the existing invoice_number when
+-- adding a revision to an invoice that's already been saved at least once.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION insert_invoice_revision(
   p_invoice_number text,
@@ -93,25 +107,38 @@ RETURNS neom_pdf
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_invoice_number text;
   v_next_revision integer;
   v_row neom_pdf;
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtextextended(p_invoice_number, 0));
+  IF p_invoice_number IS NULL THEN
+    v_invoice_number := 'INV-' || to_char(CURRENT_DATE, 'YYYY') || '-' ||
+      lpad(nextval('neom_invoice_number_seq')::text, 4, '0');
+    v_next_revision := 1;
+  ELSE
+    v_invoice_number := p_invoice_number;
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_invoice_number, 0));
 
-  SELECT COALESCE(MAX(revision_number), 0) + 1
-  INTO v_next_revision
-  FROM neom_pdf
-  WHERE invoice_number = p_invoice_number;
+    SELECT COALESCE(MAX(revision_number), 0) + 1
+    INTO v_next_revision
+    FROM neom_pdf
+    WHERE invoice_number = v_invoice_number;
+  END IF;
 
   INSERT INTO neom_pdf (invoice_number, revision_number, invoice_data)
-  VALUES (p_invoice_number, v_next_revision, p_invoice_data)
+  VALUES (v_invoice_number, v_next_revision, p_invoice_data)
   RETURNING * INTO v_row;
 
   RETURN v_row;
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION generate_invoice_number() TO anon, authenticated;
+-- peek_next_invoice_number() reads the sequence directly (SELECT ... FROM
+-- neom_invoice_number_seq) rather than calling nextval(), so it needs its
+-- own explicit SELECT grant — nextval() below only needs USAGE, which
+-- Supabase's default privileges already cover for anon/authenticated.
+GRANT SELECT ON neom_invoice_number_seq TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION peek_next_invoice_number() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION insert_invoice_revision(text, jsonb) TO anon, authenticated;
 
 -- -----------------------------------------------------------------------------

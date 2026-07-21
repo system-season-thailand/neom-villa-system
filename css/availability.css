@@ -43,8 +43,9 @@
 
 .calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 6px;
+  min-width: 0;
 }
 
 .calendar-weekday {
@@ -59,6 +60,7 @@
 
 .calendar-cell {
   position: relative;
+  min-width: 0;
   min-height: 78px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -67,6 +69,7 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  cursor: default;
   transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 
@@ -97,14 +100,39 @@
   color: var(--text-primary);
 }
 
+.cell-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
 .cell-status-pill {
   align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 10px;
   font-weight: 700;
   padding: 2px 7px;
   border-radius: 999px;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.cell-price {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-price.cell-price--missing {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .cell-note {
@@ -134,6 +162,72 @@
 }
 .calendar-cell[data-status="passed"] .cell-status-pill { background: var(--passed); color: #fff; }
 .calendar-cell[data-status="passed"] .cell-date { color: var(--text-muted); }
+
+.calendar-cell.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: var(--shadow-sm);
+}
+.calendar-cell.is-selected::after {
+  content: '✓';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Bulk "select multiple" mode */
+/* ---------------------------------------------------------------------- */
+.calendar-select-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.calendar-actions {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+}
+
+.bulk-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bulk-actions-count {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent-dark);
+  white-space: nowrap;
+}
+
+.bulk-actions-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bulk-action-btn {
+  gap: 6px;
+}
+.bulk-action-btn .legend-swatch {
+  width: 8px;
+  height: 8px;
+}
 
 /* Status picker popover */
 .status-popover {
@@ -178,4 +272,102 @@
 
 .status-popover-notes {
   padding: 6px 8px 2px;
+}
+
+@media (max-width: 640px) {
+  .calendar-toolbar {
+    gap: 8px;
+  }
+
+  .calendar-actions {
+    padding: 8px;
+  }
+  .bulk-actions-bar {
+    gap: 8px;
+  }
+  .bulk-actions-buttons {
+    width: 100%;
+    gap: 5px;
+  }
+  .bulk-actions-buttons .btn {
+    flex: 1 1 calc(50% - 5px);
+    font-size: 11px;
+    padding: 0 6px;
+  }
+
+  .calendar-nav {
+    gap: 15px;
+  }
+
+  .calendar-month-label {
+    /* A fixed width (not flex:1) so the box stays exactly the same size
+       regardless of month-name length — "May 2026" and "September 2026"
+       both render as this same width, so the prev/next/Today buttons never
+       shift position when navigating. Sized to fit "September 2026", the
+       widest label this format ever produces, at this font size. min-width
+       must be reset too — otherwise the base rule's 160px floor (sized for
+       the larger desktop font) still clamps this narrower mobile width. */
+    min-width: 0;
+    width: 122px;
+    flex: none;
+    font-size: 14px;
+  }
+
+  .calendar-legend {
+    gap: 8px;
+    font-size: 11px;
+  }
+  .legend-item {
+    font-size: 11px;
+    gap: 4px;
+  }
+
+  .calendar-grid {
+    gap: 3px;
+  }
+
+  .calendar-weekday {
+    font-size: 9px;
+  }
+
+  .calendar-cell {
+    min-height: 42px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    gap: 2px;
+  }
+
+  .cell-date {
+    font-size: 10.5px;
+  }
+
+  /* The text label would force each of the 7 columns wider than they can
+     be on a phone — a plain colour dot keeps the same status-at-a-glance
+     information (it matches the legend swatch) without needing the width. */
+  .cell-status-pill {
+    font-size: 0;
+    width: 7px;
+    height: 7px;
+    min-width: 7px;
+    padding: 0;
+  }
+
+  .cell-note {
+    display: none;
+  }
+
+  /* Read-only (User role) calendar also shows a price line per date, so it
+     gets a little extra cell height back from the space the status label
+     and note give up above (dot instead of text, note hidden entirely). */
+  .calendar-grid--priced .calendar-cell {
+    min-height: 50px;
+  }
+
+  .cell-price {
+    font-size: 8.5px;
+  }
+
+  .status-popover {
+    width: min(220px, calc(100vw - 20px));
+  }
 }

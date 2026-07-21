@@ -170,3 +170,41 @@
 .search-box {
   margin-bottom: 14px;
 }
+
+@media (max-width: 640px) {
+  .invoice-meta-row {
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .invoice-meta-box {
+    padding: 8px 10px;
+  }
+  .invoice-meta-box .kv-value {
+    font-size: 13.5px;
+  }
+
+  .field-group-title {
+    margin: 16px 0 10px;
+    font-size: 11px;
+  }
+
+  .pricing-table td, .pricing-table th {
+    font-size: 11px;
+  }
+  .pricing-table tfoot td {
+    font-size: 12.5px;
+  }
+
+  .revision-item {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+  .revision-item-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .invoice-group-header {
+    padding: 10px;
+  }
+}

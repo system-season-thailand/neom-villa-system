@@ -65,17 +65,23 @@ export async function getStatusesInRange(startISO, endISO) {
   return result;
 }
 
+const EDITABLE_STATUSES = ['available', 'booked', 'on_hold', 'blocked'];
+
+function assertEditable(dateISO, status) {
+  if (dateISO < todayISO()) {
+    throw new Error('Past dates are automatically marked as Passed and cannot be edited.');
+  }
+  if (!EDITABLE_STATUSES.includes(status)) {
+    throw new Error(`Invalid status: ${status}`);
+  }
+}
+
 /**
  * Sets the status for a single future/today date. Past dates cannot be
  * edited — the UI never offers this action, and we guard it here too.
  */
 export async function setStatus(dateISO, status, notes = '') {
-  if (dateISO < todayISO()) {
-    throw new Error('Past dates are automatically marked as Passed and cannot be edited.');
-  }
-  if (!['available', 'booked', 'on_hold', 'blocked'].includes(status)) {
-    throw new Error(`Invalid status: ${status}`);
-  }
+  assertEditable(dateISO, status);
 
   const { data, error } = await supabaseClient
     .from(TABLE)
@@ -85,4 +91,20 @@ export async function setStatus(dateISO, status, notes = '') {
 
   if (error) throw friendlyDbError(error, 'Could not update availability for this date.');
   return fromRow(data);
+}
+
+/**
+ * Applies one status to many dates at once — the "Select multiple" bulk
+ * action in the Availability tab. A single multi-row upsert, so it's one
+ * request and one all-or-nothing statement rather than N round trips.
+ */
+export async function setStatusBulk(dateIsoList, status, notes = '') {
+  if (!dateIsoList.length) return [];
+  dateIsoList.forEach((dateISO) => assertEditable(dateISO, status));
+
+  const rows = dateIsoList.map((date) => ({ date, status, notes: notes?.trim() || null }));
+  const { data, error } = await supabaseClient.from(TABLE).upsert(rows, { onConflict: 'date' }).select();
+
+  if (error) throw friendlyDbError(error, 'Could not update availability for the selected dates.');
+  return (data || []).map(fromRow);
 }

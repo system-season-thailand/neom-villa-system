@@ -16,10 +16,16 @@ function fromRow(row) {
   };
 }
 
-/** Reserves the next sequential invoice number. Never re-used, never editable by staff. */
-export async function generateInvoiceNumber() {
-  const { data, error } = await supabaseClient.rpc('generate_invoice_number');
-  if (error) throw friendlyDbError(error, 'Could not generate an invoice number.');
+/**
+ * Read-only preview of what the next invoice number *would* be — it does
+ * not consume it. The real number is only minted at the moment an invoice
+ * is actually first saved (see `saveInvoiceRevision` and
+ * `insert_invoice_revision()` in SQL), so refreshing the page or importing
+ * an old invoice to look at it can never burn a number that's never used.
+ */
+export async function peekNextInvoiceNumber() {
+  const { data, error } = await supabaseClient.rpc('peek_next_invoice_number');
+  if (error) throw friendlyDbError(error, 'Could not preview the next invoice number.');
   return data;
 }
 
@@ -72,23 +78,6 @@ export async function calculateStayPricing(checkInISO, checkOutISO) {
 
   const total = rows.reduce((sum, r) => sum + r.subtotal, 0);
   return { rows, total, missingDates: [] };
-}
-
-/**
- * Read-only preview of what the next revision number will be, so the PDF
- * can display it before the atomic insert happens. The insert itself
- * (insert_invoice_revision) recomputes this server-side under an advisory
- * lock, so this is purely for display and never trusted for correctness.
- */
-export async function peekNextRevisionNumber(invoiceNumber) {
-  const { data, error } = await supabaseClient
-    .from(TABLE)
-    .select('revision_number')
-    .eq('invoice_number', invoiceNumber)
-    .order('revision_number', { ascending: false })
-    .limit(1);
-  if (error) throw friendlyDbError(error, 'Could not determine the next revision number.');
-  return (data && data[0]?.revision_number ? data[0].revision_number : 0) + 1;
 }
 
 /** Every saved revision for a given invoice number, newest first. */
@@ -144,6 +133,12 @@ export async function listInvoiceGroups({ search = '' } = {}) {
  * to regenerate the exact same PDF later (see `pdfGenerator.js` /
  * `regenerateRevisionPdf` in invoiceTab.js), so there is nothing to store
  * beyond the structured data itself.
+ *
+ * Pass `invoiceNumber: null` for a brand-new invoice that's never been
+ * saved before — the SQL function mints the real number itself as part of
+ * this same insert (see `insert_invoice_revision()`), so the returned row's
+ * `invoiceNumber` is the one to start using, not whatever preview was shown
+ * beforehand.
  */
 export async function saveInvoiceRevision({ invoiceNumber, invoiceData }) {
   const { data, error } = await supabaseClient

@@ -65,22 +65,74 @@ about than introducing a UI framework the project brief explicitly excluded.
 
 ## Data flow: creating an invoice
 
-1. `invoiceTab` calls `invoiceService.generateInvoiceNumber()` on mount,
-   which calls the `generate_invoice_number()` Postgres function via
-   `supabase.rpc(...)`. The number is displayed read-only immediately.
+There is no "New Invoice" button. `invoiceTab` always shows either a
+brand-new, not-yet-saved form or an existing invoice loaded for editing —
+the only way back to a fresh blank form is downloading the current one.
+
+1. `invoiceTab` calls `invoiceService.peekNextInvoiceNumber()` on mount (and
+   again right after downloading a brand-new invoice), which calls the
+   `peek_next_invoice_number()` Postgres function via `supabase.rpc(...)`.
+   This is a **preview only** — it reads the sequence's current state
+   without consuming it, so it's displayed read-only but is not yet a real,
+   committed invoice number (see `state.invoiceNumberCommitted`).
 2. As the user fills in check-in date and nights, `invoiceTab` debounces a
    call to `invoiceService.calculateStayPricing()`, which fetches every
    `neom_price` row overlapping the stay and splits it into one row per
    pricing period (see `DATABASE.md` for the algorithm).
-3. On **Download Invoice PDF**: the form is validated, `pdfGenerator.js`
-   renders a PDF `Blob` entirely client-side, and its underlying data (guest
-   name, dates, pricing rows, total, generation timestamp — no file) is
-   recorded via the `insert_invoice_revision()` RPC (which atomically
-   assigns the next revision number) — **and only after that succeeds** does
-   the browser download trigger. This ordering exists specifically so a
-   "downloaded" invoice is never left unsaved (see `PDF_ENGINE.md`).
-   Re-downloading an old revision later doesn't fetch a stored file either —
-   it re-runs `pdfGenerator.js` against that revision's saved data snapshot.
+3. On **Download Invoice PDF**: the form is validated, then
+   `insert_invoice_revision()` is called via RPC with the `invoice_data`
+   snapshot (guest name, guest by, dates, pricing rows, total, generation
+   timestamp — no file) and either the existing invoice number (revising a
+   committed invoice) or `NULL` (a brand-new invoice — the function mints
+   the real number itself as part of the same insert; see `DATABASE.md` →
+   "Revision system"). Only *after* that save succeeds does `pdfGenerator.js`
+   render the PDF `Blob`, built from what the save actually returned, and
+   only then does the browser download trigger. This ordering exists
+   specifically so a "downloaded" invoice is never left unsaved, and so a
+   saved invoice number always corresponds to a real, downloaded PDF (see
+   `PDF_ENGINE.md`). If this was a brand-new invoice, the form then resets
+   to another blank preview for the next guest; revising an existing
+   invoice instead stays on the same form. Re-downloading an old revision
+   later doesn't fetch a stored file either — it re-runs `pdfGenerator.js`
+   against that revision's saved data snapshot.
+
+## Pricing rule date picker
+
+The Add/Edit Pricing Rule modal (`pricesTab.js`) doesn't use a native
+`<input type="date">` for its Start/End fields — native date pickers only
+support a min/max bound, with no way to grey out arbitrary dates in the
+middle of the range. Since the whole point of the picker is to help staff
+spot non-priced gaps at a glance, `createDatePicker()` renders its own small
+calendar popover (the same `buildMonthMatrix`/`monthLabel` helpers the
+Availability tab uses) and disables every date already covered by some
+*other* `neom_price` rule — fetched fresh via `priceService.listPrices()` at
+modal-open time rather than reused from the table's own (possibly
+search-filtered) state. The rule currently being edited, if any, is excluded
+from that disabled set so its own existing range stays selectable.
+
+## Role gate (Admin / User)
+
+`js/auth/authService.js` checks an entered password against two hardcoded
+values and stores the resulting role (`'admin'` or `'user'`) in
+`localStorage`. `app.js` checks this before anything else runs: no role means
+`loginGate.js` replaces `#app` with a password form and nothing else loads;
+a role present means the app boots as normal, with `initTabs(role)` hiding
+the فاتورة/اسعار tab buttons entirely for `'user'` (they're never mounted —
+`invoiceTab.js`/`pricesTab.js` aren't even fetched for that role) and
+`availabilityTab.mount(el, { readOnly: role === 'user' })` disabling every
+interactive affordance on the calendar (no cell clicks, no bulk-select bar),
+leaving it a pure status display. The read-only view also fetches
+`neom_price` for the visible month (admins don't pay this cost — they have
+the full اسعار tab) and prints each date's nightly rate above its status
+pill, in red ("لا يوجد سعر") for any date no pricing rule covers — see
+`findPriceForDate()` in `availabilityTab.js`.
+
+**This is a UX convenience, not a security boundary.** The passwords are
+plain strings in a client-side bundle, and every Supabase table remains
+open to the anon key regardless of role (see `DATABASE.md`). It stops the
+wrong tab from being one accidental click away on a shared front-desk
+device; it does not stop someone with dev tools from reading the source or
+querying Supabase directly. See `FUTURE_IMPROVEMENTS.md`.
 
 ## Error handling
 

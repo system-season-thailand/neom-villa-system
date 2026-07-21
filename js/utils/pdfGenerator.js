@@ -1,17 +1,15 @@
-// Builds the invoice PDF entirely with jsPDF's vector drawing primitives
-// (text/line/rect calls) — never html2canvas or any raster snapshot — so
-// the exported file stays crisp at any zoom/print size and small in bytes.
+// Builds the invoice PDF with jsPDF's vector drawing primitives (text/line/
+// rect calls) for all Latin/numeric content — the vast majority of every
+// invoice — which keeps the file small (jsPDF's built-in Helvetica is a
+// "standard 14" PDF font: it's never embedded at all) and crisp at any zoom.
 //
-// The Latin/numeric content (the vast majority of every invoice) uses
-// jsPDF's built-in Helvetica, which is a "standard 14" PDF font: it is
-// never embedded in the file at all, keeping typical invoices only a few
-// KB. The Amiri Arabic font is embedded on demand, only when the invoice
-// actually contains Arabic text (e.g. the "عميل خاص" guest name), and only
-// once per document.
+// Arabic text (e.g. the "عميل خاص" guest name) is the one exception: see the
+// big comment above renderArabicToImage() for why it's rendered via the
+// browser's own text engine onto a canvas and embedded as a small image,
+// rather than drawn as PDF vector text.
 import { formatDisplayDate } from './dateUtils.js';
 import { formatIDR, formatNumber } from './format.js';
-import { containsArabic, shapeForPdf } from './arabicReshaper.js';
-import { AMIRI_REGULAR_BASE64 } from './amiriFont.js';
+import { containsArabic } from './arabicReshaper.js';
 
 const PAGE_MARGIN = 18;
 const PAGE_WIDTH = 210;
@@ -23,24 +21,108 @@ const COLOR_ACCENT = [181, 98, 47];
 const COLOR_BORDER = [225, 227, 231];
 const COLOR_SURFACE = [247, 247, 248];
 
-function ensureArabicFont(doc) {
-  if (doc.__amiriLoaded) return;
-  doc.addFileToVFS('Amiri-Regular.ttf', AMIRI_REGULAR_BASE64);
-  doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
-  doc.__amiriLoaded = true;
+const MM_PER_PT = 25.4 / 72;
+// Render at a high internal resolution so the embedded image stays crisp
+// even when the PDF is zoomed in or printed (roughly 300+ effective DPI for
+// normal invoice text sizes).
+const ARABIC_CANVAS_SCALE = 6;
+const ARABIC_FONT_FAMILY = 'Tajawal'; // already loaded by index.html for the app's own Arabic UI text
+
+/**
+ * Arabic text is the one thing on this invoice jsPDF cannot be trusted to
+ * draw correctly. jsPDF has no text-shaping engine, so the standard
+ * workaround (used throughout most jsPDF+Arabic tutorials) is to pre-shape
+ * the text into Unicode presentation-form glyphs yourself and hand jsPDF an
+ * already-reordered string. That was this app's original approach — but
+ * testing (across two different well-regarded Arabic fonts and two major
+ * jsPDF versions) turned up a real, reproducible bug: specific letter pairs
+ * (e.g. ي→ل, ك→ل, م→ل) render with a visible gap instead of the connected
+ * cursive stroke Arabic requires, because jsPDF/the font's presentation-form
+ * glyphs don't position correctly relative to each other in that code path.
+ * It isn't a shaping-table bug on this app's side — the same broken spacing
+ * reproduces with the *original, unsubsetted* font files.
+ *
+ * The reliable fix is to stop asking jsPDF to lay the glyphs out at all.
+ * Every browser's <canvas> 2D text API goes through the same real text-
+ * shaping stack as normal DOM text (HarfBuzz/DirectWrite/CoreText
+ * depending on OS), so it renders Arabic correctly by construction. This
+ * function draws the given Arabic string to an offscreen canvas at high
+ * resolution and returns a PNG data URL plus its size in PDF millimeters,
+ * for embedding with doc.addImage(). Everything else on the invoice is
+ * still pure vector text — only the Arabic run itself becomes a (small,
+ * high-DPI) image. See PDF_ENGINE.md for the trade-off this implies for
+ * copy/paste and text search.
+ */
+function renderArabicToImage(text, { sizePt, weight = '400', color = COLOR_INK } = {}) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const pxSize = sizePt * ARABIC_CANVAS_SCALE;
+  const pad = Math.ceil(pxSize * 0.08);
+
+  ctx.font = `${weight} ${pxSize}px ${ARABIC_FONT_FAMILY}`;
+  const measured = ctx.measureText(text);
+  const ascent = Math.ceil(measured.actualBoundingBoxAscent || pxSize * 0.82);
+  const descent = Math.ceil(measured.actualBoundingBoxDescent || pxSize * 0.24);
+  const width = Math.ceil(measured.width) + pad * 2;
+  const height = ascent + descent + pad * 2;
+
+  canvas.width = width;
+  canvas.height = height;
+  // Resizing a canvas clears all context state, so font/fill must be reapplied.
+  ctx.font = `${weight} ${pxSize}px ${ARABIC_FONT_FAMILY}`;
+  ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, width - pad, ascent + pad);
+
+  return {
+    dataUrl: canvas.toDataURL('image/png'),
+    widthMM: (width / ARABIC_CANVAS_SCALE) * MM_PER_PT,
+    heightMM: (height / ARABIC_CANVAS_SCALE) * MM_PER_PT,
+    // Fraction of the image's height that sits above the text baseline —
+    // needed to convert jsPDF's baseline-relative y into the image's top-left y.
+    baselineRatio: (ascent + pad) / height
+  };
 }
 
-/** Draws `text`, transparently switching to the shaped Arabic font when needed. */
+/** Ensures the Arabic web font used by renderArabicToImage() is actually
+ * loaded before anything tries to measure/draw it — otherwise the very
+ * first Arabic invoice of a session could silently fall back to a generic
+ * serif and measure/draw incorrectly. */
+async function ensureArabicWebFontReady() {
+  if (document.fonts?.ready) {
+    try {
+      await Promise.all([
+        document.fonts.load(`400 32px ${ARABIC_FONT_FAMILY}`),
+        document.fonts.load(`700 32px ${ARABIC_FONT_FAMILY}`)
+      ]);
+      await document.fonts.ready;
+    } catch {
+      // If font loading APIs are unavailable or the load fails, proceed anyway —
+      // the browser will fall back to its default font rather than throwing.
+    }
+  }
+}
+
+/** Draws `text` as vector PDF text, or — for Arabic — as an embedded image (see renderArabicToImage above). */
 function drawText(doc, text, x, y, { size = 10, weight = 'normal', color = COLOR_INK, align = 'left' } = {}) {
   const value = text == null ? '' : String(text);
-  doc.setFontSize(size);
-  doc.setTextColor(...color);
 
   if (containsArabic(value)) {
-    ensureArabicFont(doc);
-    doc.setFont('Amiri', 'normal');
-    doc.text(shapeForPdf(value), x, y, { align });
+    const { dataUrl, widthMM, heightMM, baselineRatio } = renderArabicToImage(value, {
+      sizePt: size,
+      weight: weight === 'bold' ? '700' : '400',
+      color
+    });
+    let drawX = x;
+    if (align === 'right') drawX = x - widthMM;
+    else if (align === 'center') drawX = x - widthMM / 2;
+    const drawY = y - heightMM * baselineRatio;
+    doc.addImage(dataUrl, 'PNG', drawX, drawY, widthMM, heightMM);
   } else {
+    doc.setFontSize(size);
+    doc.setTextColor(...color);
     doc.setFont('helvetica', weight);
     doc.text(value, x, y, { align });
   }
@@ -66,17 +148,27 @@ function newDoc() {
 /**
  * @param {object} invoice
  * @param {string} invoice.invoiceNumber
- * @param {number} invoice.revisionNumber - display-only preview, see peekNextRevisionNumber()
+ * @param {number} invoice.revisionNumber - the real, already-saved revision number returned by
+ *   insert_invoice_revision() (1 for a brand-new invoice, 2 for its first revision, etc). The PDF
+ *   itself displays this one lower (0, 1, ...) — see the displayRevision comment below — so the
+ *   very first PDF anyone downloads for an invoice number reads "Revision 0", not "Revision 1".
  * @param {string} invoice.guestName
+ * @param {string} [invoice.guestBy] - optional, who referred/booked the guest
  * @param {string} invoice.checkInDate - ISO date
  * @param {string} invoice.checkOutDate - ISO date
  * @param {number} invoice.nights
  * @param {string} invoice.villaType
  * @param {Array}  invoice.priceRows - [{startDate,endDate,nights,pricePerNight,seasonNote,subtotal}]
  * @param {number} invoice.total
- * @returns {{ blob: Blob, fileName: string }}
+ * @returns {Promise<{ blob: Blob, fileName: string }>}
  */
-export function generateInvoicePdf(invoice) {
+export async function generateInvoicePdf(invoice) {
+  const hasArabic =
+    containsArabic(invoice.guestName) || invoice.priceRows.some((row) => containsArabic(row.seasonNote));
+  if (hasArabic) {
+    await ensureArabicWebFontReady();
+  }
+
   const doc = newDoc();
   doc.setProperties({
     title: `Invoice ${invoice.invoiceNumber}`,
@@ -103,7 +195,7 @@ export function generateInvoicePdf(invoice) {
     weight: 'bold',
     align: 'right'
   });
-  drawText(doc, `Generated ${formatDisplayDate(invoice.generatedAt || todayIsoLocal())}`, PAGE_MARGIN + CONTENT_WIDTH, y + 16, {
+  drawText(doc, `Date: ${formatDisplayDate(invoice.generatedAt || todayIsoLocal())}`, PAGE_MARGIN + CONTENT_WIDTH, y + 16, {
     size: 8.5,
     color: COLOR_MUTED,
     align: 'right'
@@ -117,6 +209,9 @@ export function generateInvoicePdf(invoice) {
   // ---- Guest ---------------------------------------------------------
   y += 10;
   drawLabelValue(doc, 'Guest Name', invoice.guestName, PAGE_MARGIN, y);
+  if (invoice.guestBy) {
+    drawLabelValue(doc, 'Guest By', invoice.guestBy, PAGE_MARGIN + CONTENT_WIDTH, y, { align: 'right' });
+  }
 
   // ---- Stay details panel --------------------------------------------
   y += 12;
@@ -175,17 +270,27 @@ export function generateInvoicePdf(invoice) {
       3: { halign: 'right', cellWidth: 34 },
       4: { halign: 'right', cellWidth: 34, fontStyle: 'bold' }
     },
+    // Arabic season notes: suppress autoTable's own text draw and stash a
+    // pre-rendered image instead (see renderArabicToImage's doc comment) —
+    // placed in didDrawCell, once the cell's final x/y/height are known.
     didParseCell(data) {
-      const text = Array.isArray(data.cell.raw) ? data.cell.raw.join(' ') : data.cell.raw;
       if (data.section !== 'body') return;
+      const text = Array.isArray(data.cell.raw) ? data.cell.raw.join(' ') : data.cell.raw;
       if (typeof text === 'string' && containsArabic(text)) {
-        ensureArabicFont(data.doc);
-        data.cell.styles.font = 'Amiri';
-        data.cell.text = [shapeForPdf(text)];
+        data.cell.__arabicImage = renderArabicToImage(text, { sizePt: 9.5, weight: '400', color: COLOR_INK });
+        data.cell.text = [];
         if (!data.cell.styles.halign || data.cell.styles.halign === 'left') {
           data.cell.styles.halign = 'right';
         }
       }
+    },
+    didDrawCell(data) {
+      if (data.section !== 'body' || !data.cell.__arabicImage) return;
+      const { dataUrl, widthMM, heightMM } = data.cell.__arabicImage;
+      const padRight = 2;
+      const drawX = data.cell.x + data.cell.width - widthMM - padRight;
+      const drawY = data.cell.y + (data.cell.height - heightMM) / 2;
+      data.doc.addImage(dataUrl, 'PNG', drawX, drawY, widthMM, heightMM);
     }
   });
 
@@ -204,11 +309,18 @@ export function generateInvoicePdf(invoice) {
   });
 
   // ---- Footer --------------------------------------------------------
+  // The database's revision_number is 1 for a brand-new invoice (so
+  // MAX(revision_number)+1 numbering has no off-by-one elsewhere), but staff
+  // read a first-time invoice as "Revision 0" and expect its file to have no
+  // "-revN" suffix at all — only an actual revision (the 2nd+ download of the
+  // same invoice number) should say "Revision 1" and add "-rev1". Shifting
+  // the *displayed* number down by one here keeps that DB invariant untouched.
+  const displayRevision = invoice.revisionNumber - 1;
   const footerY = 297 - PAGE_MARGIN;
   doc.setDrawColor(...COLOR_BORDER);
   doc.setLineWidth(0.3);
   doc.line(PAGE_MARGIN, footerY - 10, PAGE_MARGIN + CONTENT_WIDTH, footerY - 10);
-  drawText(doc, `Revision ${invoice.revisionNumber}`, PAGE_MARGIN, footerY - 4, { size: 8, color: COLOR_MUTED });
+  drawText(doc, `Revision ${displayRevision}`, PAGE_MARGIN, footerY - 4, { size: 8, color: COLOR_MUTED });
   drawText(doc, 'Thank you for staying with Neom Villa.', PAGE_MARGIN + CONTENT_WIDTH, footerY - 4, {
     size: 8,
     color: COLOR_MUTED,
@@ -216,7 +328,9 @@ export function generateInvoicePdf(invoice) {
   });
 
   const blob = doc.output('blob');
-  const fileName = `${invoice.invoiceNumber}-rev${invoice.revisionNumber}.pdf`;
+  const fileName = displayRevision > 0
+    ? `${invoice.invoiceNumber}-rev${displayRevision}.pdf`
+    : `${invoice.invoiceNumber}.pdf`;
   return { blob, fileName };
 }
 

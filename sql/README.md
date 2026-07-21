@@ -1,6 +1,6 @@
 # Database setup
 
-Three SQL scripts create everything the app needs: tables, constraints,
+Four SQL scripts create everything the app needs: tables, constraints,
 indexes, triggers, helper functions, and RLS policies. After running them
 the app works immediately — no further database changes are needed.
 
@@ -17,7 +17,8 @@ file.
    1. [`001_create_neom_pdf.sql`](001_create_neom_pdf.sql) — invoice/PDF revisions table, invoice numbering, and the shared `set_updated_at()` trigger function that 002/003 depend on.
    2. [`002_create_neom_price.sql`](002_create_neom_price.sql) — seasonal pricing table, with a database-level exclusion constraint that rejects overlapping date ranges.
    3. [`003_create_neom_availability.sql`](003_create_neom_availability.sql) — calendar availability table.
-3. Confirm each script reports success before running the next one — 002 and 003 both call a function defined in 001.
+   4. [`004_create_neom_system_settings.sql`](004_create_neom_system_settings.sql) — staff-editable option lists (currently just "Guest By"), seeded with its initial values.
+3. Confirm each script reports success before running the next one — 002, 003, and 004 all call a function defined in 001.
 
 Every statement in every script is idempotent (`CREATE ... IF NOT EXISTS`,
 `DROP POLICY/TRIGGER IF EXISTS` before recreating), so re-running a script —
@@ -30,11 +31,12 @@ or all three — is always safe.
 | `neom_pdf` | One row per saved invoice **revision**, storing a full JSON data snapshot (no PDF file). Never updated or deleted by the app — only ever inserted, so old revisions are never overwritten. |
 | `neom_price` | Seasonal nightly rates. A GiST exclusion constraint makes overlapping date ranges impossible to insert. |
 | `neom_availability` | One row per calendar date that has ever been changed from its default. Sparse by design — see the comment at the top of `003_create_neom_availability.sql`. |
+| `neom_system_settings` | Staff-editable option lists, one row per option. Currently powers the Invoice tab's "Guest By" dropdown (`setting_key = 'guest_by'`); the `setting_key` column exists to hold future lists too, without a schema change. |
 
 Helper functions (all called from the app via `supabase.rpc(...)`):
 
-- `generate_invoice_number()` — reserves the next sequential, never-reused invoice number.
-- `insert_invoice_revision(...)` — atomically computes the next revision number for an invoice and inserts it, under an advisory lock so two staff saving at once can't collide.
+- `peek_next_invoice_number()` — read-only preview of what the next invoice number *would* be, without consuming it. Numbers are only actually minted by `insert_invoice_revision()` below, at the moment a brand-new invoice is first saved.
+- `insert_invoice_revision(...)` — atomically computes the next revision number for an invoice and inserts it, under an advisory lock so two staff saving at once can't collide. Pass a `NULL` invoice number for a brand-new invoice and it mints the real, permanent number itself as part of the same insert.
 
 ## Security model
 

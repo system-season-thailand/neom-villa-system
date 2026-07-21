@@ -1,6 +1,7 @@
 import * as invoiceService from '../services/invoiceService.js';
+import * as settingsService from '../services/settingsService.js';
 import { toast } from './toast.js';
-import { openModal, confirmDialog } from './modal.js';
+import { openModal } from './modal.js';
 import { addDays, formatDisplayDate, formatDateTime, todayISO } from '../utils/dateUtils.js';
 import { formatIDR, formatNumber } from '../utils/format.js';
 import { generateInvoicePdf } from '../utils/pdfGenerator.js';
@@ -8,17 +9,27 @@ import { validateGuestName, validateCheckIn, validateNights, validateVillaType }
 
 const PRIVATE_GUEST_LABEL = 'عميل خاص';
 const VILLA_TYPES = ['3 Bedroom Villa', '2 Bedroom Villa'];
+const ADD_NEW_GUEST_BY_VALUE = '__add_new__';
 
 let els = {};
 let state = null;
 let pricingRequestId = 0;
 let pricingDebounce = null;
+// Kept outside `state` (unlike everything else) so it survives blankState()
+// resets — it's a shared list, not per-invoice data, and re-fetching it on
+// every new invoice would be wasteful.
+let guestByOptions = [];
 
 function blankState() {
   return {
     invoiceNumber: null,
     invoiceNumberLoading: true,
+    // True once invoiceNumber is a real, minted number (already saved, or
+    // loaded/imported from an existing invoice) rather than just a preview
+    // of what the next number would be — see handleDownload().
+    invoiceNumberCommitted: false,
     guestName: '',
+    guestBy: '',
     checkInDate: '',
     nights: '',
     villaType: VILLA_TYPES[0],
@@ -36,6 +47,7 @@ export function mount(container) {
   state = blankState();
   syncFormFromState();
   startNewInvoice();
+  loadGuestByOptions();
 }
 
 function cacheEls(container) {
@@ -46,6 +58,7 @@ function cacheEls(container) {
     errGuestName: container.querySelector('#err-guest-name'),
     fieldGuestName: container.querySelector('#field-guest-name'),
     chipPrivateGuest: container.querySelector('#chip-private-guest'),
+    guestBy: container.querySelector('#guest-by'),
     checkIn: container.querySelector('#check-in'),
     errCheckIn: container.querySelector('#err-check-in'),
     fieldCheckIn: container.querySelector('#field-check-in'),
@@ -56,7 +69,6 @@ function cacheEls(container) {
     villaType: container.querySelector('#villa-type'),
     pricingContainer: container.querySelector('#pricing-container'),
     btnDownload: container.querySelector('#btn-download'),
-    btnNew: container.querySelector('#btn-new'),
     btnImport: container.querySelector('#btn-import'),
     revisionsContainer: container.querySelector('#revisions-container')
   };
@@ -72,6 +84,14 @@ function bindEvents() {
   els.guestName.addEventListener('input', () => {
     state.guestName = els.guestName.value;
     clearFieldError('guestName');
+  });
+
+  els.guestBy.addEventListener('change', () => {
+    if (els.guestBy.value === ADD_NEW_GUEST_BY_VALUE) {
+      openAddGuestByModal();
+      return;
+    }
+    state.guestBy = els.guestBy.value;
   });
 
   els.checkIn.addEventListener('change', () => {
@@ -91,7 +111,6 @@ function bindEvents() {
   });
 
   els.btnDownload.addEventListener('click', handleDownload);
-  els.btnNew.addEventListener('click', handleNewInvoice);
   els.btnImport.addEventListener('click', openImportModal);
 }
 
@@ -156,12 +175,105 @@ function syncFormFromState() {
     ? 'Generating…'
     : state.invoiceNumber || '—';
   els.guestName.value = state.guestName;
+  renderGuestBySelect();
   els.checkIn.value = state.checkInDate;
   els.nights.value = state.nights;
   els.villaType.value = state.villaType;
   els.checkOut.value = currentCheckOut() ? formatDisplayDate(currentCheckOut()) : '';
   renderPricing();
   renderRevisions();
+}
+
+// ---------------------------------------------------------------------------
+// Guest By — a staff-editable option list stored in neom_system_settings
+// (see settingsService.js) rather than hardcoded, so new names don't need a
+// code change.
+// ---------------------------------------------------------------------------
+async function loadGuestByOptions() {
+  try {
+    guestByOptions = await settingsService.listGuestByOptions();
+  } catch (err) {
+    toast.error(err.message);
+    guestByOptions = [];
+  }
+  renderGuestBySelect();
+}
+
+function renderGuestBySelect() {
+  const current = state.guestBy;
+  // A value loaded from an older revision might not be in the current
+  // (possibly since-edited) options list — show it anyway rather than
+  // silently blanking the field.
+  const options = current && !guestByOptions.includes(current) ? [current, ...guestByOptions] : guestByOptions;
+
+  els.guestBy.innerHTML = `
+    <option value="">— Select —</option>
+    ${options
+      .map((opt) => `<option value="${escapeHtml(opt)}"${opt === current ? ' selected' : ''}>${escapeHtml(opt)}</option>`)
+      .join('')}
+    <option value="${ADD_NEW_GUEST_BY_VALUE}">+ Add new…</option>
+  `;
+}
+
+function openAddGuestByModal() {
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <div class="field">
+      <label class="field-label" for="new-guest-by-name">Name</label>
+      <input class="input" type="text" id="new-guest-by-name" placeholder="e.g. Faisal" autocomplete="off" />
+    </div>
+    <div class="field-error" id="new-guest-by-error" style="display:none;"></div>
+  `;
+
+  const footer = document.createElement('div');
+  footer.style.display = 'flex';
+  footer.style.gap = '8px';
+  footer.innerHTML = `
+    <button type="button" class="btn btn-secondary" id="new-guest-by-cancel">Cancel</button>
+    <button type="button" class="btn btn-primary" id="new-guest-by-save">Add</button>
+  `;
+
+  const dialog = openModal({
+    title: 'Add Guest By Option',
+    bodyEl: body,
+    footerEl: footer,
+    // Covers both Cancel and backing out via Escape/backdrop click — either
+    // way, the select must fall back off "+ Add new…" to whatever was
+    // actually chosen before (state.guestBy is untouched in that case).
+    onClose: () => renderGuestBySelect()
+  });
+
+  const nameInput = body.querySelector('#new-guest-by-name');
+  const errorEl = body.querySelector('#new-guest-by-error');
+  const saveBtn = footer.querySelector('#new-guest-by-save');
+
+  footer.querySelector('#new-guest-by-cancel').addEventListener('click', () => dialog.close());
+
+  saveBtn.addEventListener('click', async () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      errorEl.textContent = 'Enter a name first.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.classList.add('is-loading');
+    try {
+      const added = await settingsService.addGuestByOption(name);
+      guestByOptions = [...guestByOptions, added];
+      state.guestBy = added;
+      toast.success(`"${added}" added to Guest By.`);
+      dialog.close();
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.style.display = 'block';
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.classList.remove('is-loading');
+    }
+  });
+
+  nameInput.focus();
 }
 
 function renderPricing() {
@@ -231,12 +343,12 @@ function renderPricing() {
 function renderRevisions() {
   const host = els.revisionsContainer;
   if (!state.invoiceNumber || state.invoiceNumberLoading) {
-    host.innerHTML = `<div class="state-block"><div class="state-title">No revisions yet</div><div class="state-desc">Download the invoice to create the first revision.</div></div>`;
+    host.innerHTML = `<div class="state-block"><div class="state-title">No revisions yet</div></div>`;
     return;
   }
 
   if (!state.revisions.length) {
-    host.innerHTML = `<div class="state-block"><div class="state-title">No revisions yet</div><div class="state-desc">Download the invoice to create the first revision for ${escapeHtml(state.invoiceNumber)}.</div></div>`;
+    host.innerHTML = `<div class="state-block"><div class="state-title">No revisions yet</div></div>`;
     return;
   }
 
@@ -274,30 +386,15 @@ async function startNewInvoice() {
   state = blankState();
   syncFormFromState();
   try {
-    state.invoiceNumber = await invoiceService.generateInvoiceNumber();
+    // A read-only preview — invoiceNumberCommitted stays false, so this
+    // number is never actually consumed unless this invoice is downloaded.
+    state.invoiceNumber = await invoiceService.peekNextInvoiceNumber();
   } catch (err) {
     toast.error(err.message);
   } finally {
     state.invoiceNumberLoading = false;
     syncFormFromState();
   }
-}
-
-async function handleNewInvoice() {
-  if (hasUnsavedInput()) {
-    const ok = await confirmDialog({
-      title: 'Start a new invoice?',
-      message: 'Any unsaved changes to the current invoice will be lost.',
-      confirmLabel: 'Start New',
-      danger: true
-    });
-    if (!ok) return;
-  }
-  startNewInvoice();
-}
-
-function hasUnsavedInput() {
-  return Boolean(state.guestName || state.checkInDate || state.nights);
 }
 
 function clearFieldError(field) {
@@ -365,12 +462,15 @@ async function handleDownload() {
   setSaving(true);
   try {
     const checkOutDate = currentCheckOut();
-    const revisionNumber = await invoiceService.peekNextRevisionNumber(state.invoiceNumber);
+    const wasCommitted = state.invoiceNumberCommitted;
 
-    const invoiceForPdf = {
-      invoiceNumber: state.invoiceNumber,
-      revisionNumber,
+    // Everything needed to regenerate this exact PDF later — including the
+    // generation date — so re-downloading an old revision (see
+    // regenerateRevisionPdf below) reproduces it faithfully rather than
+    // stamping it with today's date. No PDF file is stored anywhere.
+    const invoiceData = {
       guestName: state.guestName.trim(),
+      guestBy: state.guestBy || '',
       checkInDate: state.checkInDate,
       checkOutDate,
       nights: Number(state.nights),
@@ -380,35 +480,39 @@ async function handleDownload() {
       generatedAt: todayISO()
     };
 
-    const { blob, fileName } = generateInvoicePdf(invoiceForPdf);
-
-    // Everything needed to regenerate this exact PDF later — including the
-    // generation date — so re-downloading an old revision (see
-    // regenerateRevisionPdf below) reproduces it faithfully rather than
-    // stamping it with today's date. No PDF file is stored anywhere.
-    const invoiceData = {
-      guestName: invoiceForPdf.guestName,
-      checkInDate: invoiceForPdf.checkInDate,
-      checkOutDate: invoiceForPdf.checkOutDate,
-      nights: invoiceForPdf.nights,
-      villaType: invoiceForPdf.villaType,
-      priceRows: invoiceForPdf.priceRows,
-      total: invoiceForPdf.total,
-      generatedAt: invoiceForPdf.generatedAt
-    };
-
-    // Persist before triggering the browser download — a downloaded invoice
-    // must always exist as a saved revision, never the other way around.
+    // Persist before generating/triggering the download — a downloaded
+    // invoice must always exist as a saved revision, never the other way
+    // around. For a brand-new invoice (never saved before), pass null so
+    // the real invoice number is minted here — at the moment it's actually
+    // used — rather than back when this form was first opened or reloaded.
     const saved = await invoiceService.saveInvoiceRevision({
-      invoiceNumber: state.invoiceNumber,
+      invoiceNumber: wasCommitted ? state.invoiceNumber : null,
       invoiceData
     });
 
-    triggerBrowserDownload(blob, fileName);
-    toast.success(`Invoice ${state.invoiceNumber} — Revision ${saved.revisionNumber} saved and downloaded.`);
+    state.invoiceNumber = saved.invoiceNumber;
+    state.invoiceNumberCommitted = true;
 
-    state.revisions = await invoiceService.listRevisions(state.invoiceNumber);
-    renderRevisions();
+    const { blob, fileName } = await generateInvoicePdf({
+      invoiceNumber: saved.invoiceNumber,
+      revisionNumber: saved.revisionNumber,
+      ...invoiceData
+    });
+
+    triggerBrowserDownload(blob, fileName);
+    toast.success(`Invoice ${saved.invoiceNumber} — Revision ${saved.revisionNumber} saved and downloaded.`);
+
+    if (wasCommitted) {
+      state.revisions = await invoiceService.listRevisions(state.invoiceNumber);
+      renderRevisions();
+    } else {
+      // The "New Invoice" button was removed — reaching a blank form is now
+      // only possible by actually downloading one, which is what just
+      // happened. Revising an already-committed invoice instead stays on
+      // the same form, so multi-round edits (e.g. fixing a typo and
+      // re-downloading) don't lose context.
+      startNewInvoice();
+    }
   } catch (err) {
     toast.error(err.message);
   } finally {
@@ -447,7 +551,9 @@ function applyLoadedRevision(rev) {
   const d = rev.invoiceData;
   state.invoiceNumber = rev.invoiceNumber;
   state.invoiceNumberLoading = false;
+  state.invoiceNumberCommitted = true;
   state.guestName = d.guestName || '';
+  state.guestBy = d.guestBy || '';
   state.checkInDate = d.checkInDate || '';
   state.nights = d.nights || '';
   state.villaType = d.villaType || VILLA_TYPES[0];
@@ -469,9 +575,9 @@ function applyLoadedRevision(rev) {
  * original generation date), which reproduces the exact same PDF that was
  * downloaded at the time.
  */
-function regenerateRevisionPdf(rev) {
+async function regenerateRevisionPdf(rev) {
   try {
-    const { blob, fileName } = generateInvoicePdf({
+    const { blob, fileName } = await generateInvoicePdf({
       invoiceNumber: rev.invoiceNumber,
       revisionNumber: rev.revisionNumber,
       ...rev.invoiceData
@@ -520,7 +626,7 @@ async function openImportModal() {
 
 function renderImportResults(host, groups, dialog) {
   if (!groups.length) {
-    host.innerHTML = `<div class="state-block"><div class="state-title">No invoices found</div><div class="state-desc">Try a different search term.</div></div>`;
+    host.innerHTML = `<div class="state-block"><div class="state-title">No invoices found</div></div>`;
     return;
   }
 
@@ -537,8 +643,8 @@ function renderImportResults(host, groups, dialog) {
         </div>
         <div class="invoice-group-body" hidden id="group-body-${idx}">
           ${group.revisions
-            .map(
-              (rev) => `
+          .map(
+            (rev) => `
             <div class="revision-item">
               <div class="revision-item-main">
                 <div class="revision-item-title">Revision ${rev.revisionNumber}</div>
@@ -548,8 +654,8 @@ function renderImportResults(host, groups, dialog) {
                 <button class="btn btn-sm btn-primary" data-import-id="${rev.id}">Load for editing</button>
               </div>
             </div>`
-            )
-            .join('')}
+          )
+          .join('')}
         </div>
       </div>`
     )
@@ -591,15 +697,8 @@ function escapeHtml(value) {
 function template() {
   return `
     <div class="page invoice-page">
-      <div class="page-header">
-        <div>
-          <div class="page-title">فاتورة <span class="text-muted" style="font-size:13px;font-weight:500;">Invoice</span></div>
-          <div class="page-subtitle">Create, revise and export guest invoices</div>
-        </div>
-        <div class="page-actions">
-          <button class="btn btn-secondary" id="btn-import" type="button">Import Invoice</button>
-          <button class="btn btn-secondary" id="btn-new" type="button">New Invoice</button>
-        </div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" id="btn-import" type="button">Import Invoice</button>
       </div>
 
       <div class="layout-grid">
@@ -620,6 +719,11 @@ function template() {
                 <button type="button" class="chip arabic-text" id="chip-private-guest">عميل خاص</button>
               </div>
               <div class="field-error" id="err-guest-name"></div>
+            </div>
+
+            <div class="field" id="field-guest-by">
+              <label class="field-label" for="guest-by">Guest By</label>
+              <select class="input" id="guest-by"></select>
             </div>
 
             <div class="field-group-title">Stay</div>

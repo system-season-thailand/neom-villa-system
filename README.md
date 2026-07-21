@@ -61,8 +61,7 @@ identically if you ever move off GitHub Pages.
 
 ```
 ├── index.html                 App shell: topbar, tab nav, the three panel containers
-├── manifest.json               PWA manifest (installable, icons, theme)
-├── service-worker.js           Offline app-shell caching
+├── manifest.json               PWA manifest (icons, theme, standalone display)
 │
 ├── css/
 │   ├── base.css                 Design tokens (colors, type, resets)
@@ -70,20 +69,25 @@ identically if you ever move off GitHub Pages.
 │   ├── components.css            Reusable UI: buttons, forms, tables, modal, toast, badges
 │   ├── invoice.css               Invoice tab-specific styles
 │   ├── prices.css                Prices tab-specific styles
-│   └── availability.css          Availability calendar styles
+│   ├── availability.css          Availability calendar styles
+│   └── auth.css                  Login gate + topbar role badge styles
 │
 ├── js/
-│   ├── app.js                    Entry point: tab router, connection indicator, mounts tabs
+│   ├── app.js                    Entry point: auth gate, tab router, connection indicator, mounts tabs
+│   ├── auth/
+│   │   └── authService.js         Role gate (Admin/User) — localStorage-backed, see ARCHITECTURE.md
 │   ├── config/
 │   │   └── supabase.js            Supabase client + credentials
 │   ├── services/                  All Supabase reads/writes — the only layer that talks to the DB
 │   │   ├── invoiceService.js        Invoice numbers, pricing calc, revisions
 │   │   ├── priceService.js          Seasonal pricing CRUD
-│   │   └── availabilityService.js   Calendar status CRUD
+│   │   ├── availabilityService.js   Calendar status CRUD (incl. bulk status updates)
+│   │   └── settingsService.js       Staff-editable option lists (Guest By)
 │   ├── components/                 One file per UI feature, each exporting mount(container)
 │   │   ├── invoiceTab.js
 │   │   ├── pricesTab.js
 │   │   ├── availabilityTab.js
+│   │   ├── loginGate.js
 │   │   ├── modal.js
 │   │   └── toast.js
 │   ├── state/
@@ -93,10 +97,8 @@ identically if you ever move off GitHub Pages.
 │       ├── format.js                IDR currency formatting
 │       ├── validators.js            Form field validation
 │       ├── dbErrors.js              Friendly messages for Postgres error codes
-│       ├── pdfGenerator.js          Builds the invoice PDF (jsPDF, vector text)
-│       ├── arabicReshaper.js        Arabic text shaping + bidi reorder for the PDF
-│       ├── arabicData.js            Generated Arabic letter-joining tables
-│       └── amiriFont.js             Generated base64 Arabic font (embedded on demand)
+│       ├── pdfGenerator.js          Builds the invoice PDF (jsPDF vector text + canvas-rendered Arabic)
+│       └── arabicReshaper.js        containsArabic() — routes Arabic strings to canvas rendering
 │
 ├── assets/
 │   ├── icons/                     PWA icons + favicon

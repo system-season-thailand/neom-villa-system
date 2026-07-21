@@ -6,6 +6,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+  /* .card is a CSS Grid item inside .layout-grid — without this, a grid
+     item's automatic minimum width is based on its content's intrinsic
+     size, so a wide nowrap table (e.g. a multi-row pricing breakdown after
+     loading an existing invoice) blows out the card instead of scrolling
+     internally via .table-wrap, which drags the whole page into horizontal
+     scroll on mobile. */
+  min-width: 0;
 }
 
 .card-header {
@@ -24,6 +31,7 @@
 
 .card-body {
   padding: 20px;
+  min-width: 0;
 }
 
 .card-body + .card-body {
@@ -300,6 +308,7 @@ textarea.input {
   padding: 11px 14px;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .data-table tbody tr:hover {
@@ -527,4 +536,60 @@ textarea.input {
 .kv-list dd {
   margin: 0;
   font-weight: 600;
+}
+
+/* ==========================================================================
+   Small screens — shared component sizing
+   ========================================================================== */
+@media (max-width: 640px) {
+  .card-body {
+    padding: 12px;
+  }
+
+  .card-header {
+    padding: 12px 14px;
+  }
+
+  .field-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .btn {
+    height: 34px;
+    padding: 0 11px;
+    font-size: 12.5px;
+  }
+
+  .btn-sm {
+    height: 28px;
+    padding: 0 8px;
+    font-size: 11.5px;
+  }
+
+  /* Data tables (Prices tab, etc.) run slightly smaller so more columns
+     fit before .table-wrap's overflow-x becomes the fallback. */
+  .data-table {
+    font-size: 11.5px;
+  }
+  .data-table th {
+    padding: 7px 8px;
+    font-size: 9.5px;
+  }
+  .data-table td {
+    padding: 8px 8px;
+  }
+  .cell-actions {
+    gap: 4px;
+  }
+
+  .modal-header {
+    padding: 12px 14px;
+  }
+  .modal-body {
+    padding: 14px;
+  }
+  .modal-footer {
+    padding: 10px 14px;
+  }
 }

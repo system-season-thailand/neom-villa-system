@@ -90,23 +90,65 @@ which is also why it requires no cron job, scheduled function, or nightly
 batch update: it's correct by construction, at any moment, with zero
 maintenance.
 
+### `neom_system_settings` — staff-editable option lists
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid, PK | |
+| `setting_key` | text | Groups related options — currently only `'guest_by'` exists |
+| `setting_value` | text | The option's display text, e.g. `'Tariq'` |
+| `sort_order` | integer | Seed data is numbered 1–15 in the order given in the project brief; options added later from the app get `999`, so they sort after the original list |
+
+Unique on `(setting_key, setting_value)` so the same name can't be added
+twice under one key. This currently powers the Invoice tab's **Guest By**
+dropdown (`js/services/settingsService.js`) — staff can add new names
+directly from the "+ Add new…" option in that dropdown rather than needing a
+code change. The generic `setting_key` column exists so a future
+staff-editable list (of a different kind) can reuse this same table instead
+of needing a new one.
+
 ## Revision system
 
-Every PDF download creates a **new row**, never an update:
+Every PDF download creates a **new row**, never an update. There is no
+"New Invoice" button — the Invoice tab always shows either a brand-new,
+not-yet-saved form or an existing invoice loaded for editing, and the only
+way to reach a fresh blank form is by actually downloading the current one
+(see `handleDownload()` in `js/components/invoiceTab.js`).
 
-1. The client asks Postgres for a read-only preview of the next revision
-   number (`peekNextRevisionNumber`, a plain `SELECT ... ORDER BY
-   revision_number DESC LIMIT 1`), purely so the PDF can print "Revision N"
-   before it's saved.
+1. On mount (or right after a brand-new invoice is downloaded), the client
+   asks Postgres for a read-only **preview** of the next invoice number
+   (`peekNextInvoiceNumber()` → `peek_next_invoice_number()`, which reads the
+   sequence's current state without calling `nextval()`). This number is
+   shown in the UI but is not yet real — nothing has consumed it.
 2. `pdfGenerator.js` renders the PDF blob entirely client-side, in memory.
 3. `insert_invoice_revision(...)` — a Postgres function — is called via RPC
-   with the invoice number and the `invoice_data` snapshot (no file
-   involved). It takes an **advisory lock keyed on the invoice number**
+   with the `invoice_data` snapshot and either the existing invoice number
+   (revising an already-saved invoice) or `NULL` (a brand-new invoice that's
+   never been saved). For `NULL`, the function itself calls `nextval()` on
+   the sequence and uses that as both the real invoice number and revision
+   1 — **this is the only place a number is ever actually consumed**, which
+   is what makes reloading the page, or importing an old invoice to look at
+   it, completely free: neither one calls `insert_invoice_revision`, so
+   neither one can burn a number. For an existing invoice number, the
+   function takes an **advisory lock keyed on the invoice number**
    (`pg_advisory_xact_lock(hashtextextended(invoice_number, 0))`), then
    computes `MAX(revision_number) + 1` and inserts the row, inside one
    transaction. The advisory lock is what makes this safe even if two staff
    happened to save the same invoice number at the exact same moment — the
    read-then-insert can't race.
+4. The PDF is generated from the row `insert_invoice_revision` actually
+   returned (real invoice number, real revision number) — not from the
+   pre-save preview — so the downloaded file and the saved database row can
+   never disagree.
+
+**Earlier design, and why it changed:** invoice numbers used to be minted
+(via `nextval()`) the moment the Invoice tab mounted, on every page load.
+That guaranteed uniqueness just as well, but it meant every page refresh,
+or every time staff imported an old invoice just to look at it, silently
+burned a number that was never used — permanent gaps with no invoice behind
+them. Moving the `nextval()` call inside `insert_invoice_revision()`, gated
+behind an actual save, fixes that at the source rather than working around
+it client-side.
 
 The app never issues an `UPDATE` or `DELETE` against `neom_pdf`. "Editing an
 invoice" means loading a past revision's `invoice_data` back into the form

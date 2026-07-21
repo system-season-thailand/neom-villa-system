@@ -1,7 +1,7 @@
 import * as priceService from '../services/priceService.js';
 import { toast } from './toast.js';
 import { openModal, confirmDialog } from './modal.js';
-import { formatDisplayDate } from '../utils/dateUtils.js';
+import { formatDisplayDate, buildMonthMatrix, monthLabel, todayISO, addDays, parseISO } from '../utils/dateUtils.js';
 import { formatNumber } from '../utils/format.js';
 import { validatePriceRange, validatePricePerNight } from '../utils/validators.js';
 
@@ -12,6 +12,7 @@ const SORT_COLUMNS = {
   price_per_night: 'Price / Night',
   season_note: 'Season Note'
 };
+const WEEKDAY_LETTERS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 
 let els = {};
 let state = {
@@ -22,6 +23,15 @@ let state = {
   sortDir: 'asc'
 };
 let searchDebounce = null;
+
+// Only one date-picker popover (of the two in the Add/Edit modal) is ever
+// open at a time — opening one closes the other, matching the same
+// single-popover pattern the Availability calendar uses.
+let activeDatePicker = null;
+function closeActiveDatePicker() {
+  activeDatePicker?.close();
+  activeDatePicker = null;
+}
 
 export function mount(container) {
   container.innerHTML = template();
@@ -90,11 +100,6 @@ function render() {
       <div class="state-block">
         <div class="state-icon">📅</div>
         <div class="state-title">${state.search ? 'No matching pricing rules' : 'No pricing rules yet'}</div>
-        <div class="state-desc">${
-          state.search
-            ? 'Try a different search term.'
-            : 'Add your first seasonal rate — invoice totals are calculated from these rules automatically.'
-        }</div>
       </div>
     `;
     return;
@@ -161,23 +166,169 @@ async function handleDelete(id) {
   }
 }
 
-function openPriceForm(existing) {
+/** Every date from startISO to endISO, inclusive — ranges here are always a handful of weeks/months, never large enough to matter. */
+function expandDateRange(startISO, endISO) {
+  const dates = [];
+  let cursor = startISO;
+  while (cursor <= endISO) {
+    dates.push(cursor);
+    cursor = addDays(cursor, 1);
+  }
+  return dates;
+}
+
+/**
+ * Dates already covered by some other pricing rule — used to grey these out
+ * in the Add/Edit form's date pickers so staff can spot non-priced gaps at a
+ * glance instead of cross-checking the table. The rule being edited (if any)
+ * is excluded so its own current range stays pickable.
+ */
+function buildDisabledDateSet(rules, excludeId) {
+  const disabled = new Set();
+  for (const rule of rules) {
+    if (excludeId && rule.id === excludeId) continue;
+    for (const iso of expandDateRange(rule.startDate, rule.endDate)) disabled.add(iso);
+  }
+  return disabled;
+}
+
+/**
+ * A small inline calendar popover standing in for `<input type="date">` —
+ * native date inputs have no way to grey out arbitrary dates, only a
+ * min/max bound, which can't express "every date some other pricing rule
+ * already covers." Mirrors the Availability tab's own month-grid popover
+ * (same `buildMonthMatrix`/`monthLabel` helpers) for a consistent feel.
+ */
+function createDatePicker({ value: initialValue, disabledDates }) {
+  let value = initialValue || '';
+  const refDate = value ? parseISO(value) : new Date();
+  let year = refDate.getFullYear();
+  let month = refDate.getMonth();
+  let popoverEl = null;
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'input date-picker-trigger';
+  syncTriggerLabel();
+
+  trigger.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (popoverEl) close();
+    else open();
+  });
+
+  function syncTriggerLabel() {
+    trigger.textContent = value ? formatDisplayDate(value) : 'Select date';
+    trigger.classList.toggle('is-placeholder', !value);
+  }
+
+  function open() {
+    closeActiveDatePicker();
+    popoverEl = document.createElement('div');
+    popoverEl.className = 'date-picker-popover';
+    popoverEl.addEventListener('click', (event) => event.stopPropagation());
+    document.body.appendChild(popoverEl);
+    renderCalendar();
+
+    const rect = trigger.getBoundingClientRect();
+    const top = Math.min(rect.bottom + 6, window.innerHeight - popoverEl.offsetHeight - 10);
+    const left = Math.min(rect.left, window.innerWidth - popoverEl.offsetWidth - 10);
+    popoverEl.style.top = `${Math.max(10, top)}px`;
+    popoverEl.style.left = `${Math.max(10, left)}px`;
+
+    activeDatePicker = { close };
+  }
+
+  function close() {
+    popoverEl?.remove();
+    popoverEl = null;
+    if (activeDatePicker && activeDatePicker.close === close) activeDatePicker = null;
+  }
+
+  function renderCalendar() {
+    const weeks = buildMonthMatrix(year, month);
+    const today = todayISO();
+
+    popoverEl.innerHTML = `
+      <div class="date-picker-nav">
+        <button type="button" class="btn btn-icon btn-secondary btn-sm" data-nav="prev" aria-label="Previous month">‹</button>
+        <div class="date-picker-month-label">${monthLabel(year, month)}</div>
+        <button type="button" class="btn btn-icon btn-secondary btn-sm" data-nav="next" aria-label="Next month">›</button>
+      </div>
+      <div class="date-picker-grid">
+        ${WEEKDAY_LETTERS.map((w) => `<div class="date-picker-weekday">${w}</div>`).join('')}
+        ${weeks
+          .flat()
+          .map((day) => {
+            const isDisabled = !day.inCurrentMonth || disabledDates.has(day.iso);
+            const classes = ['date-picker-day'];
+            if (!day.inCurrentMonth) classes.push('is-empty');
+            if (day.iso === today) classes.push('is-today');
+            if (day.iso === value) classes.push('is-selected');
+            if (isDisabled) classes.push('is-disabled');
+            return `<button type="button" class="${classes.join(' ')}" data-date="${day.iso}" ${isDisabled ? 'disabled' : ''}>${day.day}</button>`;
+          })
+          .join('')}
+      </div>
+    `;
+
+    popoverEl.querySelectorAll('[data-nav]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        month += btn.dataset.nav === 'next' ? 1 : -1;
+        if (month < 0) {
+          month = 11;
+          year -= 1;
+        } else if (month > 11) {
+          month = 0;
+          year += 1;
+        }
+        renderCalendar();
+      });
+    });
+
+    popoverEl.querySelectorAll('.date-picker-day:not(.is-disabled):not(.is-empty)').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        value = btn.dataset.date;
+        syncTriggerLabel();
+        close();
+      });
+    });
+  }
+
+  return {
+    trigger,
+    getValue: () => value
+  };
+}
+
+async function openPriceForm(existing) {
   const isEdit = Boolean(existing);
+
+  // Fetch the full, unfiltered rule list for the disabled-dates set — the
+  // table's own state.prices can be narrowed by an active search term.
+  let allRules = state.prices;
+  try {
+    allRules = await priceService.listPrices();
+  } catch (err) {
+    toast.error(err.message);
+  }
+  const disabledDates = buildDisabledDateSet(allRules, existing?.id);
+
   const body = document.createElement('div');
   body.innerHTML = `
     <div class="field-row">
       <div class="field" id="f-start">
         <label class="field-label" for="price-start">Start Date <span class="required">*</span></label>
-        <input class="input" type="date" id="price-start" value="${existing?.startDate || ''}" />
+        <div id="price-start-slot"></div>
       </div>
       <div class="field" id="f-end">
         <label class="field-label" for="price-end">End Date <span class="required">*</span></label>
-        <input class="input" type="date" id="price-end" value="${existing?.endDate || ''}" />
+        <div id="price-end-slot"></div>
       </div>
     </div>
     <div class="field" id="f-amount">
       <label class="field-label" for="price-amount">Price per Night (IDR) <span class="required">*</span></label>
-      <input class="input" type="number" min="0" step="1" id="price-amount" value="${existing?.pricePerNight ?? ''}" placeholder="e.g. 2500000" />
+      <input class="input" type="text" inputmode="numeric" id="price-amount" value="${existing ? formatNumber(existing.pricePerNight) : ''}" placeholder="e.g. 2.500.000" />
     </div>
     <div class="field">
       <label class="field-label" for="price-note">Season Note</label>
@@ -189,6 +340,11 @@ function openPriceForm(existing) {
     <div class="field-error" id="price-form-error" style="display:none;"></div>
   `;
 
+  const startPicker = createDatePicker({ value: existing?.startDate || '', disabledDates });
+  const endPicker = createDatePicker({ value: existing?.endDate || '', disabledDates });
+  body.querySelector('#price-start-slot').appendChild(startPicker.trigger);
+  body.querySelector('#price-end-slot').appendChild(endPicker.trigger);
+
   const footer = document.createElement('div');
   footer.style.display = 'flex';
   footer.style.gap = '8px';
@@ -197,7 +353,16 @@ function openPriceForm(existing) {
     <button type="button" class="btn btn-primary" id="price-save">${isEdit ? 'Save Changes' : 'Add Pricing Rule'}</button>
   `;
 
-  const dialog = openModal({ title: isEdit ? 'Edit Pricing Rule' : 'Add Pricing Rule', bodyEl: body, footerEl: footer });
+  const dialog = openModal({
+    title: isEdit ? 'Edit Pricing Rule' : 'Add Pricing Rule',
+    bodyEl: body,
+    footerEl: footer,
+    onClose: () => {
+      document.removeEventListener('click', closeActiveDatePicker);
+      closeActiveDatePicker();
+    }
+  });
+  document.addEventListener('click', closeActiveDatePicker);
 
   body.querySelectorAll('.note-suggestion').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -206,13 +371,46 @@ function openPriceForm(existing) {
   );
   footer.querySelector('#price-cancel').addEventListener('click', () => dialog.close());
 
+  // Reformats with thousands separators as the user types — e.g. typing
+  // "2500000" displays as "2.500.000" — matching the same grouping used
+  // everywhere else in the app (pricing table, invoice PDF). Re-inserting
+  // the value moves the caret to the end by default, which makes editing
+  // in the middle of a number impossible (every keystroke would land at
+  // the end instead), so the caret is placed back by digit count rather
+  // than character index — separators shift around it, digits don't.
+  const amountInput = body.querySelector('#price-amount');
+  amountInput.addEventListener('input', () => {
+    const caret = amountInput.selectionStart;
+    const digitsBeforeCaret = amountInput.value.slice(0, caret).replace(/\D/g, '').length;
+
+    const digits = amountInput.value.replace(/\D/g, '');
+    amountInput.value = digits ? formatNumber(Number(digits)) : '';
+
+    let newCaret = amountInput.value.length;
+    if (digitsBeforeCaret === 0) {
+      newCaret = 0;
+    } else {
+      let seen = 0;
+      for (let i = 0; i < amountInput.value.length; i++) {
+        if (/\d/.test(amountInput.value[i])) {
+          seen++;
+          if (seen === digitsBeforeCaret) {
+            newCaret = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    amountInput.setSelectionRange(newCaret, newCaret);
+  });
+
   const errorEl = body.querySelector('#price-form-error');
   const saveBtn = footer.querySelector('#price-save');
 
   saveBtn.addEventListener('click', async () => {
-    const startDate = body.querySelector('#price-start').value;
-    const endDate = body.querySelector('#price-end').value;
-    const pricePerNight = body.querySelector('#price-amount').value;
+    const startDate = startPicker.getValue();
+    const endDate = endPicker.getValue();
+    const pricePerNight = amountInput.value.replace(/\D/g, '');
     const seasonNote = body.querySelector('#price-note').value;
 
     const rangeError = validatePriceRange(startDate, endDate);
@@ -266,15 +464,9 @@ function escapeHtml(value) {
 function template() {
   return `
     <div class="page">
-      <div class="page-header">
-        <div>
-          <div class="page-title">اسعار <span class="text-muted" style="font-size:13px;font-weight:500;">Prices</span></div>
-          <div class="page-subtitle">Seasonal pricing used automatically when generating invoices</div>
-        </div>
         <div class="page-actions">
           <button class="btn btn-primary" id="btn-add-price" type="button">+ Add Pricing Rule</button>
         </div>
-      </div>
 
       <div class="prices-toolbar">
         <input class="input search-box" type="search" id="prices-search" placeholder="Search by season note…" />

@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="css/invoice.css" />
 <link rel="stylesheet" href="css/prices.css" />
 <link rel="stylesheet" href="css/availability.css" />
+<link rel="stylesheet" href="css/auth.css" />
 </head>
 <body>
 
@@ -33,9 +34,15 @@
         <span class="brand-sub">Staff Console</span>
       </div>
     </div>
-    <div class="topbar-status" id="connection-status" title="Supabase connection status">
-      <span class="status-dot" id="status-dot"></span>
-      <span id="status-label">Connecting…</span>
+    <div class="topbar-right">
+      <div class="topbar-status" id="connection-status" title="Supabase connection status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-label">Connecting…</span>
+      </div>
+      <div class="topbar-auth">
+        <span class="role-badge" id="role-badge"></span>
+        <button class="btn btn-sm btn-ghost" id="btn-logout" type="button">Switch User</button>
+      </div>
     </div>
   </header>
 

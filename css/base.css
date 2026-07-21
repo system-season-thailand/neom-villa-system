@@ -63,10 +63,14 @@
 
 html, body {
   height: 100%;
+  /* Safety net on top of fixing the actual overflow sources below — the
+     app never intentionally needs horizontal scroll at any viewport width. */
+  overflow-x: hidden;
 }
 
 body {
   margin: 0;
+  width: 100%;
   font-family: var(--font-en);
   font-size: 14px;
   line-height: 1.45;
