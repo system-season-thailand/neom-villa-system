@@ -172,6 +172,17 @@
 .calendar-cell[data-status="passed"] .cell-status-pill { background: var(--passed); color: #fff; }
 .calendar-cell[data-status="passed"] .cell-date { color: var(--text-muted); }
 
+/* Read-only (User role) calendar only — admins still see passed dates as
+   normal. visibility:hidden rather than display:none: the cell keeps its
+   place in the 7-column week grid (removing it from layout would shift
+   every later date in the month left by one weekday column), it just isn't
+   drawn, and — the actual point — can no longer take focus or be read by
+   assistive tech, since there's nothing here a front-desk user should be
+   spending attention on. */
+.calendar-grid--priced .calendar-cell[data-status="passed"] {
+  visibility: hidden;
+}
+
 .calendar-cell.is-selected {
   outline: 2px solid var(--accent);
   outline-offset: -2px;

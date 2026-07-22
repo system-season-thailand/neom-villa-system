@@ -475,6 +475,11 @@ function template(readOnly) {
             </div>
             <div class="calendar-legend">
               ${Object.entries(STATUSES)
+                // Passed dates are hidden outright in the read-only (User)
+                // view below, so the legend swatch explaining them would be
+                // pointing at nothing — dropping it frees up a bit more
+                // room for the swatches that still apply.
+                .filter(([key]) => !(readOnly && key === 'passed'))
                 .map(
                   ([, meta]) =>
                     `<span class="legend-item"><span class="legend-swatch" style="background:${meta.color}"></span>${meta.label}</span>`
