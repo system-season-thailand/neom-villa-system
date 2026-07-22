@@ -283,6 +283,39 @@ textarea.input {
   text-decoration: line-through;
 }
 
+/* ---------------------------------------------------------------------- */
+/* Option-list manager (Manage Guest By / Booked By list) — see
+   js/components/optionSelect.js. */
+/* ---------------------------------------------------------------------- */
+.option-manage-list {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.option-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.option-manage-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.option-manage-add-row {
+  display: flex;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.option-manage-add-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ==========================================================================
    Badges / status pills
    ========================================================================== */
@@ -638,6 +671,64 @@ textarea.input {
   }
   .data-table td {
     padding: 8px 8px;
+  }
+
+  /* .stacked-table: an opt-in alternative to .table-wrap's overflow-x
+     fallback above, for tables where horizontal scrolling genuinely isn't
+     wanted (the Invoice tab's pricing breakdown, the Summary tab's
+     breakdowns). Each row becomes its own small card with the column
+     header shown as a label next to its value, via a data-label attribute
+     the caller sets on every <td> — nothing ever needs to scroll sideways
+     to be read. */
+  .stacked-table thead {
+    display: none;
+  }
+  .stacked-table, .stacked-table tbody, .stacked-table tr, .stacked-table td {
+    display: block;
+    width: 100%;
+  }
+  .stacked-table tbody tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .stacked-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+  .stacked-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 0;
+    border-bottom: none;
+    white-space: normal;
+    text-align: right;
+  }
+  .stacked-table td::before {
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    text-align: left;
+  }
+  .stacked-table tfoot tr {
+    border: none;
+    padding: 8px 0 0;
+    margin-bottom: 0;
+  }
+  .stacked-table tfoot td {
+    border-top: 2px solid var(--ink-900);
+    padding-top: 10px;
+  }
+  /* Opt a cell out of the label treatment when its own visible text already
+     says what the label would (e.g. a plain "Total" placeholder cell whose
+     sibling carries data-label="Total" instead) — see pricing-table's markup. */
+  .stacked-table-omit-label {
+    display: none;
   }
   .date-picker-popover {
     width: min(240px, calc(100vw - 20px));

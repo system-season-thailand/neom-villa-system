@@ -38,15 +38,16 @@ components/  →  services/  →  Supabase (Postgres only)
 ## Component pattern
 
 Every tab component is a module exporting a single `mount(container)`
-function. `app.js` calls all three once, at startup:
+function. `app.js` calls all four once, at startup:
 
 ```js
 invoiceTab.mount(document.getElementById('tab-invoice'));
 pricesTab.mount(document.getElementById('tab-prices'));
 availabilityTab.mount(document.getElementById('tab-availability'));
+summaryTab.mount(document.getElementById('tab-summary'));
 ```
 
-All three tabs are mounted into the DOM up front and simply shown/hidden via
+All four tabs are mounted into the DOM up front and simply shown/hidden via
 the `hidden` attribute when the user switches tabs — not re-mounted every
 time. Two reasons:
 
@@ -58,7 +59,7 @@ time. Two reasons:
 
 Each component keeps a private module-level `state` object plus a `render()`
 function that re-renders from that state. There's no virtual DOM or diffing
-— for three tabs' worth of UI, targeted `innerHTML` updates on specific
+— for four tabs' worth of UI, targeted `innerHTML` updates on specific
 containers (e.g. re-rendering just the pricing breakdown table when nights
 change, not the whole form) are simple and fast enough, and easier to reason
 about than introducing a UI framework the project brief explicitly excluded.
@@ -119,9 +120,41 @@ The two call sites use it differently:
   pickable, including past ones — and an `onChange` callback instead, since
   picking a check-in date needs to immediately recompute the check-out date
   and re-run pricing, not just wait to be read at save time.
+- **Summary tab's Custom range** (`summaryTab.js`) uses both `onChange` and
+  the picker's `open()` method together: picking a From date opens the To
+  field's picker automatically — one fewer click for the common case of
+  setting both ends of a range back to back. The Prices tab's Start field
+  does the same for its End field.
 
 Only one popover is ever open at a time, app-wide — `datePicker.js` tracks
 that itself and closes the previous one whenever a new one opens.
+`setValue()` keeps the popover's own displayed month in sync with whatever
+value it's given, not just the trigger's label text — needed for the
+Summary tab's month-switcher, which calls `setValue()` on every prev/next
+click rather than waiting for the user to pick a day inside the popover
+itself.
+
+## Shared option-select dropdown
+
+The Invoice tab's **Guest By** field and the Availability tab's **Booked
+By** field (in the single-date status popover) are both the same component:
+`createOptionSelect({ key, label, value, onChange })` in
+`js/components/optionSelect.js`, pointed at a different
+`neom_system_settings` key (`GUEST_BY_KEY` / `BOOKED_BY_KEY`, exported from
+`settingsService.js`) for each. Like `datePicker.js`, it's a shared UI
+component rather than something either tab owns.
+
+Beyond the plain values, the rendered `<select>` always carries two standing
+entries: **"+ Add new…"** opens a one-field modal for the fast path, and
+**"✎ Manage list…"** opens a fuller modal listing every current option with
+an inline rename (Save) and Delete button per row, plus its own add-row —
+both call straight through to `settingsService.js`'s generic
+`addOption`/`updateOption`/`deleteOption(key/id, value)`. Renaming or
+deleting an option only affects the dropdown going forward: since
+`setting_value` is copied as plain text onto whatever record used it (an
+invoice's `guestBy`, a date's `booked_by`), nothing already saved changes
+retroactively — the same reasoning `neom_price`'s free-text `season_note`
+already relies on.
 
 ## Role gate (Admin / User)
 
@@ -130,15 +163,18 @@ values and stores the resulting role (`'admin'` or `'user'`) in
 `localStorage`. `app.js` checks this before anything else runs: no role means
 `loginGate.js` replaces `#app` with a password form and nothing else loads;
 a role present means the app boots as normal, with `initTabs(role)` hiding
-the فاتورة/اسعار tab buttons entirely for `'user'` (they're never mounted —
-`invoiceTab.js`/`pricesTab.js` aren't even fetched for that role) and
-`availabilityTab.mount(el, { readOnly: role === 'user' })` disabling every
-interactive affordance on the calendar (no cell clicks, no bulk-select bar),
-leaving it a pure status display. The read-only view also fetches
-`neom_price` for the visible month (admins don't pay this cost — they have
-the full اسعار tab) and prints each date's nightly rate above its status
-pill, in red ("لا يوجد سعر") for any date no pricing rule covers — see
-`findPriceForDate()` in `availabilityTab.js`.
+the فاتورة/اسعار/ملخص tab buttons entirely for `'user'` (they're never
+mounted — `invoiceTab.js`/`pricesTab.js`/`summaryTab.js` aren't even fetched
+for that role) and `availabilityTab.mount(el, { readOnly: role === 'user' })`
+disabling every interactive affordance on the calendar (no cell clicks, no
+bulk-select bar), leaving it a pure status display. The read-only view also
+fetches `neom_price` for the visible month (admins don't pay this cost —
+they have the full اسعار tab) and prints each date's nightly rate above its
+status pill, in red ("لا يوجد سعر") for any date no pricing rule covers —
+see `findPriceForDate()` in `availabilityTab.js`. Admins get the mirror
+image on booked dates instead: `renderBookerLine()` prints whoever's
+selected in that date's Booked By field, reusing the exact same `cell-price`
+styling for a name instead of a rate.
 
 **This is a UX convenience, not a security boundary.** The passwords are
 plain strings in a client-side bundle, and every Supabase table remains
@@ -165,7 +201,7 @@ querying Supabase directly. See `FUTURE_IMPROVEMENTS.md`.
 ## Why no framework, no state library, no router
 
 Not a limitation — a project requirement, and also the right fit for this
-app's shape: three tabs, no shared cross-tab data, no deep component trees,
+app's shape: four tabs, no shared cross-tab data, no deep component trees,
 no server-side rendering. Vanilla `mount(container)` components with a thin
 service layer give the same practical benefits (separation of concerns,
 reusable pieces) without the bundler, framework runtime, or build tooling

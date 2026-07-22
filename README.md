@@ -60,7 +60,7 @@ identically if you ever move off GitHub Pages.
 ## Folder structure
 
 ```
-├── index.html                 App shell: topbar, tab nav, the three panel containers
+├── index.html                 App shell: topbar, tab nav, the four panel containers
 ├── manifest.json               PWA manifest (icons, theme, standalone display)
 │
 ├── css/
@@ -70,6 +70,7 @@ identically if you ever move off GitHub Pages.
 │   ├── invoice.css               Invoice tab-specific styles
 │   ├── prices.css                Prices tab-specific styles
 │   ├── availability.css          Availability calendar styles
+│   ├── summary.css               Summary (ملخص) tab-specific styles
 │   └── auth.css                  Login gate + topbar role badge styles
 │
 ├── js/
@@ -82,16 +83,19 @@ identically if you ever move off GitHub Pages.
 │   │   ├── invoiceService.js        Invoice numbers, pricing calc, revisions
 │   │   ├── priceService.js          Seasonal pricing CRUD
 │   │   ├── availabilityService.js   Calendar status CRUD (incl. bulk status updates)
-│   │   ├── settingsService.js       Staff-editable option lists (Guest By)
-│   │   └── linkedStayService.js     "Must be booked together" date-group CRUD
+│   │   ├── settingsService.js       Staff-editable option lists (Guest By, Booked By)
+│   │   ├── linkedStayService.js     "Must be booked together" date-group CRUD
+│   │   └── summaryService.js        Booking summary aggregation (by booker / by month)
 │   ├── components/                 One file per UI feature, each exporting mount(container)
 │   │   ├── invoiceTab.js
 │   │   ├── pricesTab.js
 │   │   ├── availabilityTab.js
+│   │   ├── summaryTab.js
 │   │   ├── loginGate.js
 │   │   ├── modal.js
 │   │   ├── toast.js
-│   │   └── datePicker.js            Shared calendar popover (Prices tab + Invoice tab's check-in)
+│   │   ├── datePicker.js            Shared calendar popover (Prices/Invoice/Summary tabs)
+│   │   └── optionSelect.js          Shared staff-editable dropdown (Guest By, Booked By)
 │   ├── state/
 │   │   └── store.js                Minimal observable store for cross-cutting state
 │   └── utils/

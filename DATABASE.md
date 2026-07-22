@@ -75,6 +75,7 @@ villa-type-specific pricing is needed later, see `FUTURE_IMPROVEMENTS.md`.
 | `status` | text | `available` \| `booked` \| `on_hold` \| `blocked` — **not** `passed` (see below) |
 | `status_color` | text | Hex color, set automatically by a trigger from `status` — never chosen by the client |
 | `notes` | text | Optional |
+| `booked_by` | text | Who made the booking — only meaningful (and only ever stored) when `status = 'booked'`; cleared to `NULL` for every other status. Feeds the "ملخص" (Summary) tab's per-booker breakdown — see below. |
 
 **This table is sparse by design.** It is not pre-populated with every
 calendar date. A date with no row is treated by the app as:
@@ -90,22 +91,41 @@ which is also why it requires no cron job, scheduled function, or nightly
 batch update: it's correct by construction, at any moment, with zero
 maintenance.
 
+**Live sync across devices:** `sql/007_enable_availability_realtime.sql`
+adds this table to Supabase's `supabase_realtime` publication. The
+Availability tab (`js/components/availabilityTab.js`) subscribes to
+`postgres_changes` on it at mount and merges every INSERT/UPDATE/DELETE
+straight into its in-memory state, repainting only when the changed date is
+in the month currently on screen — so a status change made on one device
+appears on every other open calendar with no manual refresh. This is purely
+additive: if 007 hasn't been run yet, the subscription just never receives
+anything, and the tab still works exactly as before via its normal
+fetch-on-load/navigate path.
+
 ### `neom_system_settings` — staff-editable option lists
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | uuid, PK | |
-| `setting_key` | text | Groups related options — currently only `'guest_by'` exists |
+| `setting_key` | text | Groups related options — `'guest_by'` (Invoice tab) and `'booked_by'` (Availability tab) exist so far |
 | `setting_value` | text | The option's display text, e.g. `'Tariq'` |
 | `sort_order` | integer | Seed data is numbered 1–15 in the order given in the project brief; options added later from the app get `999`, so they sort after the original list |
 
 Unique on `(setting_key, setting_value)` so the same name can't be added
-twice under one key. This currently powers the Invoice tab's **Guest By**
-dropdown (`js/services/settingsService.js`) — staff can add new names
-directly from the "+ Add new…" option in that dropdown rather than needing a
-code change. The generic `setting_key` column exists so a future
-staff-editable list (of a different kind) can reuse this same table instead
-of needing a new one.
+twice under one key. Two independent lists share this one table today —
+the Invoice tab's **Guest By** dropdown and the Availability tab's
+**Booked By** dropdown (`sql/006_add_booked_by.sql` seeds `booked_by` with
+the same starting names as `guest_by`, but from then on the two lists are
+edited completely independently). Both are driven by the same generic
+`js/components/optionSelect.js` component — see `ARCHITECTURE.md` — which
+lets staff add, rename, or delete options directly from either dropdown
+("+ Add new…" / "✎ Manage list…") rather than needing a code change. Renames
+and deletes are plain UPDATE/DELETE statements — since `setting_value` is
+just free text copied onto `neom_pdf.invoice_data`/`neom_availability` at
+save time, not a foreign key, changing or removing an option later never
+touches records that already used the old text. The generic `setting_key`
+column exists so a future staff-editable list (of a different kind) can
+reuse this same table instead of needing a new one.
 
 ### `neom_linked_stays` — "must be booked together" date groups
 
@@ -197,6 +217,43 @@ Given a check-in date and a night count, `calculateStayPricing()` in
 4. Otherwise, consecutive nights under the *same* pricing rule are grouped
    into a single invoice line (matching the project brief's example: 3
    nights at one rate + 2 nights at another = two rows, not five).
+
+## Booking summary (ملخص tab)
+
+`getBookingSummary(startISO, endISO)` in `js/services/summaryService.js`
+powers the Summary tab entirely with two read-only queries, run in parallel:
+
+1. Every `neom_availability` row with `status = 'booked'` inside the
+   selected range (i.e. a real, sparse row — never the app's synthesized
+   "available"/"passed" defaults, which never carry a `booked_by`).
+2. Every `neom_price` row overlapping the same range.
+
+For each booked date, the matching `neom_price` rule (if any — pricing
+ranges never overlap, so at most one can match) gives that night's revenue;
+`booked_by` gives who to credit it to — every booked row is guaranteed to
+have one, since `availabilityService.js` refuses to save a date as `'booked'`
+without a `booked_by` (see `assertBookedByPresent()`), enforced from the
+Availability tab's own UI: picking "Booked" doesn't save anything until a
+name is actually chosen. Both are then summed client-side two ways: by booker
+(name → nights, revenue) and by calendar month (`YYYY-MM` → nights,
+revenue) — the "per person" and "for the villa overall" views the tab shows
+side by side. A booked night with no matching pricing rule still counts
+toward nights in both breakdowns, but contributes `0` to revenue rather than
+guessing a rate; `missingPriceNights` in the result lets the UI surface that
+rather than silently understating totals.
+
+Each booker's row also carries `commission` and `guardCut` —
+`BOOKER_COMMISSION_RATE` (9%) and `GUARD_COMMISSION_RATE` (1%) of *that
+booker's own* revenue, per the villa's actual payout split for every booked
+night. Since both are flat percentages of revenue, summing each booker's
+`guardCut` is equivalent to `totalRevenue * GUARD_COMMISSION_RATE` — the tab
+shows the latter as `totalGuardCut`, a single figure covering every booker at
+once, deliberately presented as minor/secondary info next to nights/revenue/
+commission (a flat 1% "for reference" line, not its own stat box) since it's
+one fixed cut rather than a per-booker concern the way commission is.
+
+This is a read-only report — it has no write path of its own, and doesn't
+change how `neom_availability`/`neom_price` are used anywhere else.
 
 ## Row Level Security
 

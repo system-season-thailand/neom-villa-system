@@ -222,7 +222,14 @@ async function openPriceForm(existing) {
     <div class="field-error" id="price-form-error" style="display:none;"></div>
   `;
 
-  const startPicker = createDatePicker({ value: existing?.startDate || '', disabledDates });
+  const startPicker = createDatePicker({
+    value: existing?.startDate || '',
+    disabledDates,
+    // Jump straight into End Date's picker right after Start Date is
+    // picked — one fewer click for the common case of picking both ends of
+    // a range back to back.
+    onChange: () => endPicker.open()
+  });
   const endPicker = createDatePicker({
     value: existing?.endDate || '',
     disabledDates,

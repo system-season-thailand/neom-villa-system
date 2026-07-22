@@ -188,68 +188,14 @@
     font-size: 11px;
   }
 
+  /* Structural mobile stacking (thead hidden, rows as cards, etc.) lives in
+     the shared .stacked-table rules in components.css — this table just
+     tweaks its own font sizes on top of that. */
   .pricing-table td, .pricing-table th {
     font-size: 11px;
   }
   .pricing-table tfoot td {
     font-size: 12.5px;
-  }
-
-  /* Below 640px, the 5-column layout can't fit without horizontal scroll —
-     instead of falling back to .table-wrap's overflow-x (fine for the
-     Prices tab's own table, but not what's wanted here), each row becomes
-     its own small card with the column header shown as a label next to its
-     value via the data-label attribute set in invoiceTab.js, so nothing
-     ever needs to scroll sideways to be read. */
-  .pricing-table thead {
-    display: none;
-  }
-  .pricing-table, .pricing-table tbody, .pricing-table tr, .pricing-table td {
-    display: block;
-    width: 100%;
-  }
-  .pricing-table tbody tr {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
-    margin-bottom: 8px;
-  }
-  .pricing-table tbody tr:last-child {
-    margin-bottom: 0;
-  }
-  .pricing-table td {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 10px;
-    padding: 3px 0;
-    border-bottom: none;
-    white-space: normal;
-    text-align: right;
-  }
-  .pricing-table td::before {
-    content: attr(data-label);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--text-muted);
-    text-align: left;
-  }
-  .pricing-table tfoot tr {
-    border: none;
-    padding: 8px 0 0;
-    margin-bottom: 0;
-  }
-  /* Its own visible text ("Total") already says what the label would, so
-     the label-generating cell is redundant here — hide it and let the
-     amount cell's own data-label="Total" carry that same word instead. */
-  .pricing-table tfoot .pricing-total-label {
-    display: none;
-  }
-  .pricing-table tfoot td {
-    border-top: 2px solid var(--ink-900);
-    padding-top: 10px;
   }
 
   .revision-item {

@@ -1,9 +1,12 @@
+import { supabaseClient } from '../config/supabase.js';
 import * as availabilityService from '../services/availabilityService.js';
 import { STATUSES } from '../services/availabilityService.js';
 import * as priceService from '../services/priceService.js';
 import * as linkedStayService from '../services/linkedStayService.js';
+import * as settingsService from '../services/settingsService.js';
 import { toast } from './toast.js';
 import { openModal, confirmDialog } from './modal.js';
+import { createOptionSelect } from './optionSelect.js';
 import { buildMonthMatrix, monthLabel, todayISO, addDays, formatDisplayDate } from '../utils/dateUtils.js';
 import { formatIDRShort } from '../utils/format.js';
 
@@ -48,7 +51,60 @@ export function mount(container, options = {}) {
   document.addEventListener('click', handleOutsideClick);
   document.addEventListener('keydown', handleEscape);
 
+  subscribeRealtime();
   load();
+}
+
+/**
+ * Live sync across devices — a status change made on one phone/laptop shows
+ * up on every other device with this calendar open, no manual refresh
+ * needed. Requires `neom_availability` to be added to the `supabase_realtime`
+ * publication (see sql/007_enable_availability_realtime.sql); until that's
+ * been run in Supabase this subscribes successfully but simply never
+ * receives any events; the calendar still works fully via manual navigation
+ * either way, since load() is unaffected by this. Never torn down: every tab
+ * is mounted exactly once for the lifetime of the page (see app.js), so
+ * there's no remount path that would stack up duplicate subscriptions.
+ */
+function subscribeRealtime() {
+  supabaseClient
+    .channel('neom_availability_live')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'neom_availability' },
+      (payload) => {
+        const dateISO = payload.eventType === 'DELETE' ? payload.old.date : payload.new.date;
+        if (payload.eventType === 'DELETE') {
+          state.statuses.delete(dateISO);
+        } else {
+          state.statuses.set(dateISO, fromRealtimeRow(payload.new));
+        }
+        // A change to a date outside the month currently on screen still
+        // updates `state.statuses` above (so it's already fresh whenever
+        // staff navigate there — though load() would refetch it fresh
+        // anyway), but only actually redraws the grid when it would change
+        // what's visible right now.
+        if (!state.loading && isDateInView(dateISO)) render();
+      }
+    )
+    .subscribe();
+}
+
+function fromRealtimeRow(row) {
+  return {
+    date: row.date,
+    status: row.status,
+    statusColor: row.status_color,
+    notes: row.notes || '',
+    bookedBy: row.booked_by || ''
+  };
+}
+
+function isDateInView(dateISO) {
+  const weeks = buildMonthMatrix(state.year, state.month);
+  const startISO = weeks[0][0].iso;
+  const endISO = weeks[weeks.length - 1][6].iso;
+  return dateISO >= startISO && dateISO <= endISO;
 }
 
 function navigate(delta) {
@@ -124,6 +180,14 @@ function renderPriceLine(dateISO) {
     : `<span class="cell-price cell-price--missing">لا يوجد سعر</span>`;
 }
 
+/** Admin-only equivalent of renderPriceLine above — the same cell-price
+ * styling, but showing who booked this date rather than its nightly rate
+ * (admins already have the full Prices tab for rates). */
+function renderBookerLine(info) {
+  if (info.status !== 'booked' || !info.bookedBy) return '';
+  return `<span class="cell-price">${escapeHtml(info.bookedBy)}</span>`;
+}
+
 // ---------------------------------------------------------------------------
 // Bulk "select multiple" mode
 // ---------------------------------------------------------------------------
@@ -143,15 +207,25 @@ function toggleDateSelection(dateISO) {
   render();
 }
 
-async function applyBulkStatus(status) {
+/**
+ * Applies one status to every selected date at once. Merges the rows the
+ * upsert itself returns straight into local state and repaints synchronously
+ * — no follow-up fetch, so there's no loading-skeleton flash for what's
+ * already-known data. Linked-stay markers and price rules are untouched by
+ * a status change, so nothing else needs to be refetched either.
+ */
+async function applyBulkStatus(status, bookedBy = '') {
   const dates = Array.from(state.selectedDates);
   if (!dates.length) return;
 
   try {
-    await availabilityService.setStatusBulk(dates, status);
+    const updatedRows = await availabilityService.setStatusBulk(dates, status, '', bookedBy);
+    for (const row of updatedRows) {
+      state.statuses.set(row.date, row);
+    }
     toast.success(`${dates.length} date${dates.length === 1 ? '' : 's'} marked as ${STATUSES[status].label}.`);
     state.selectedDates.clear();
-    load();
+    render();
   } catch (err) {
     toast.error(err.message);
   }
@@ -251,6 +325,10 @@ function renderActionsBar() {
   els.actions.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', (event) => {
       event.stopPropagation();
+      if (btn.dataset.status === 'booked') {
+        openBookedByPopover(btn, { onPick: (value) => applyBulkStatus('booked', value) });
+        return;
+      }
       applyBulkStatus(btn.dataset.status);
     });
   });
@@ -310,13 +388,12 @@ function render() {
           ${day.inCurrentMonth ? `data-status="${info.status}"` : ''}
           ${linkedTitle ? `title="${escapeAttr(linkedTitle)}"` : ''}
           ${editable ? '' : 'tabindex="-1" aria-disabled="true"'}
-          ${day.inCurrentMonth ? '' : 'disabled'}
         >
           <span class="cell-date">${day.day}</span>
           ${
             day.inCurrentMonth
               ? `<div class="cell-bottom">
-                   ${state.readOnly ? renderPriceLine(day.iso) : ''}
+                   ${state.readOnly ? renderPriceLine(day.iso) : renderBookerLine(info)}
                    <span class="cell-status-pill">${statusMeta.label}</span>
                    ${info.notes ? `<span class="cell-note" title="${escapeAttr(info.notes)}">${escapeHtml(info.notes)}</span>` : ''}
                  </div>`
@@ -378,11 +455,7 @@ function openPopover(cellEl) {
   `;
 
   document.body.appendChild(popover);
-
-  const top = Math.min(rect.bottom + 6, window.innerHeight - popover.offsetHeight - 10);
-  const left = Math.min(rect.left, window.innerWidth - popover.offsetWidth - 10);
-  popover.style.top = `${Math.max(10, top)}px`;
-  popover.style.left = `${Math.max(10, left)}px`;
+  positionPopover(popover, rect);
 
   popover.querySelector('#popover-unlink')?.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -392,14 +465,75 @@ function openPopover(cellEl) {
   popover.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', async (event) => {
       event.stopPropagation();
+      if (btn.dataset.status === 'booked') {
+        // Booked By replaces this whole popover with its own standalone one
+        // (see openBookedByPopover) rather than expanding inline — fewer
+        // clicks to pick a name, since it opens already-expanded and, where
+        // the browser supports it, with its dropdown already popped open.
+        const notes = popover.querySelector('#popover-notes').value;
+        openBookedByPopover(cellEl, {
+          currentValue: info.bookedBy || '',
+          onPick: (value) => saveStatus(dateISO, 'booked', notes, value)
+        });
+        return;
+      }
       const notes = popover.querySelector('#popover-notes').value;
-      await saveStatus(dateISO, btn.dataset.status, notes);
+      await saveStatus(dateISO, btn.dataset.status, notes, '');
     });
   });
 
   popover.addEventListener('click', (event) => event.stopPropagation());
 
   activePopover = { el: popover, dateISO };
+}
+
+/**
+ * A standalone popover holding just the Booked By picker — shown in place of
+ * whatever triggered it (the single-date status-popover, or the bulk actions
+ * bar's "Booked" button) the instant "Booked" is chosen, so picking a name
+ * is the very next action rather than something nested a click deeper.
+ * Reuses the same activePopover/closePopover plumbing as the status popover,
+ * so outside-click/Escape/re-render all close it exactly the same way.
+ */
+function openBookedByPopover(anchorEl, { currentValue = '', onPick }) {
+  closePopover();
+
+  const popover = document.createElement('div');
+  popover.className = 'status-popover';
+  popover.innerHTML = `
+    <div class="status-popover-title">Booked By</div>
+    <div class="status-popover-booked-by">
+      <div id="popover-booked-by-slot"></div>
+    </div>
+  `;
+  document.body.appendChild(popover);
+  popover.addEventListener('click', (event) => event.stopPropagation());
+
+  const picker = createOptionSelect({
+    key: settingsService.BOOKED_BY_KEY,
+    label: 'Booked By',
+    value: currentValue,
+    onChange: (value) => {
+      if (!value) return;
+      closePopover();
+      onPick(value);
+    }
+  });
+  popover.querySelector('#popover-booked-by-slot').appendChild(picker.el);
+  // Positioned only once the picker's <select> is actually in the DOM — this
+  // popover's final height depends on it, and sizing off the pre-append
+  // (shorter) height could clamp it to sit too low and run off-screen.
+  positionPopover(popover, anchorEl.getBoundingClientRect());
+
+  activePopover = { el: popover, dateISO: anchorEl.dataset.date || null };
+  picker.open();
+}
+
+function positionPopover(popover, rect) {
+  const top = Math.min(rect.bottom + 6, window.innerHeight - popover.offsetHeight - 10);
+  const left = Math.min(rect.left, window.innerWidth - popover.offsetWidth - 10);
+  popover.style.top = `${Math.max(10, top)}px`;
+  popover.style.left = `${Math.max(10, left)}px`;
 }
 
 function closePopover() {
@@ -417,12 +551,18 @@ function handleEscape(event) {
   if (event.key === 'Escape') closePopover();
 }
 
-async function saveStatus(dateISO, status, notes) {
+/**
+ * Merges the upsert's own returned row straight into local state and
+ * repaints synchronously — no follow-up fetch, so there's no loading-
+ * skeleton flash for data the mutation itself already handed back.
+ */
+async function saveStatus(dateISO, status, notes, bookedBy) {
   try {
-    await availabilityService.setStatus(dateISO, status, notes);
+    const updated = await availabilityService.setStatus(dateISO, status, notes, bookedBy);
+    state.statuses.set(dateISO, updated);
     toast.success(`${dateISO} marked as ${STATUSES[status].label}.`);
     closePopover();
-    load();
+    render();
   } catch (err) {
     toast.error(err.message);
   }

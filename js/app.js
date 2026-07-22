@@ -6,7 +6,7 @@
 // between them).
 import { getRole, logout } from './auth/authService.js';
 
-const TABS = ['invoice', 'prices', 'availability'];
+const TABS = ['invoice', 'prices', 'availability', 'summary'];
 const ROLE_LABELS = { admin: 'Admin', user: 'User' };
 
 function initTabs(role) {
@@ -14,15 +14,16 @@ function initTabs(role) {
   const panels = {
     invoice: document.getElementById('tab-invoice'),
     prices: document.getElementById('tab-prices'),
-    availability: document.getElementById('tab-availability')
+    availability: document.getElementById('tab-availability'),
+    summary: document.getElementById('tab-summary')
   };
 
   buttons.forEach((btn) => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab, buttons, panels));
   });
 
-  // The "user" role only ever sees the Availability tab — فاتورة and اسعار
-  // deal in pricing and guest invoices, which is admin-only territory.
+  // The "user" role only ever sees the Availability tab — فاتورة, اسعار,
+  // and ملخص all deal in pricing/bookings data, which is admin-only territory.
   if (role === 'user') {
     buttons.forEach((btn) => {
       if (btn.dataset.tab !== 'availability') btn.hidden = true;
@@ -125,16 +126,19 @@ async function init() {
 
   // Dynamic imports so a CDN hiccup (Supabase/jsPDF failing to load) shows a
   // clear, recoverable error screen instead of a blank white page. The
-  // "user" role never even downloads invoiceTab.js/pricesTab.js — it can't
-  // reach either tab, so there's no reason to fetch or mount them.
-  let supabaseConfig, availabilityTab, invoiceTab, pricesTab;
+  // "user" role never even downloads invoiceTab.js/pricesTab.js/summaryTab.js
+  // — it can't reach any of those tabs, so there's no reason to fetch or
+  // mount them.
+  let supabaseConfig, availabilityTab, invoiceTab, pricesTab, summaryTab;
   try {
     const modules = await Promise.all([
       import('./config/supabase.js'),
       import('./components/availabilityTab.js'),
-      ...(role === 'admin' ? [import('./components/invoiceTab.js'), import('./components/pricesTab.js')] : [])
+      ...(role === 'admin'
+        ? [import('./components/invoiceTab.js'), import('./components/pricesTab.js'), import('./components/summaryTab.js')]
+        : [])
     ]);
-    [supabaseConfig, availabilityTab, invoiceTab, pricesTab] = modules;
+    [supabaseConfig, availabilityTab, invoiceTab, pricesTab, summaryTab] = modules;
   } catch (err) {
     console.error(err);
     showFatalError(
@@ -150,6 +154,7 @@ async function init() {
     if (role === 'admin') {
       invoiceTab.mount(document.getElementById('tab-invoice'));
       pricesTab.mount(document.getElementById('tab-prices'));
+      summaryTab.mount(document.getElementById('tab-summary'));
     }
   } catch (err) {
     console.error(err);

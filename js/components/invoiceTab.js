@@ -3,25 +3,22 @@ import * as settingsService from '../services/settingsService.js';
 import { toast } from './toast.js';
 import { openModal } from './modal.js';
 import { createDatePicker } from './datePicker.js';
+import { createOptionSelect } from './optionSelect.js';
 import { addDays, formatDisplayDate, formatDateTime, todayISO } from '../utils/dateUtils.js';
 import { formatIDR, formatNumber } from '../utils/format.js';
 import { generateInvoicePdf } from '../utils/pdfGenerator.js';
 import { validateGuestName, validateCheckIn, validateNights, validateVillaType } from '../utils/validators.js';
 
 const VILLA_TYPES = ['3 Bedroom Villa', '2 Bedroom Villa'];
-const ADD_NEW_GUEST_BY_VALUE = '__add_new__';
 
 let els = {};
 let state = null;
 let pricingRequestId = 0;
 let pricingDebounce = null;
-// Kept outside `state` (unlike everything else) so it survives blankState()
-// resets — it's a shared list, not per-invoice data, and re-fetching it on
-// every new invoice would be wasteful.
-let guestByOptions = [];
-// Created once at mount and reused across resets — same reasoning as
-// guestByOptions above (the picker instance itself isn't per-invoice state).
+// Created once at mount and reused across blankState() resets — these are
+// standalone form controls, not per-invoice state.
 let checkInPicker = null;
+let guestByPicker = null;
 
 function blankState() {
   return {
@@ -56,11 +53,18 @@ export function mount(container) {
     }
   });
   els.checkInSlot.appendChild(checkInPicker.trigger);
+  guestByPicker = createOptionSelect({
+    key: settingsService.GUEST_BY_KEY,
+    label: 'Guest By',
+    onChange: (value) => {
+      state.guestBy = value;
+    }
+  });
+  els.guestBySlot.appendChild(guestByPicker.el);
   bindEvents();
   state = blankState();
   syncFormFromState();
   startNewInvoice();
-  loadGuestByOptions();
 }
 
 function cacheEls(container) {
@@ -70,7 +74,7 @@ function cacheEls(container) {
     guestName: container.querySelector('#guest-name'),
     errGuestName: container.querySelector('#err-guest-name'),
     fieldGuestName: container.querySelector('#field-guest-name'),
-    guestBy: container.querySelector('#guest-by'),
+    guestBySlot: container.querySelector('#guest-by-slot'),
     checkInSlot: container.querySelector('#check-in-slot'),
     errCheckIn: container.querySelector('#err-check-in'),
     fieldCheckIn: container.querySelector('#field-check-in'),
@@ -90,14 +94,6 @@ function bindEvents() {
   els.guestName.addEventListener('input', () => {
     state.guestName = els.guestName.value;
     clearFieldError('guestName');
-  });
-
-  els.guestBy.addEventListener('change', () => {
-    if (els.guestBy.value === ADD_NEW_GUEST_BY_VALUE) {
-      openAddGuestByModal();
-      return;
-    }
-    state.guestBy = els.guestBy.value;
   });
 
   els.nights.addEventListener('input', () => {
@@ -175,105 +171,13 @@ function syncFormFromState() {
     ? 'Generating…'
     : state.invoiceNumber || '—';
   els.guestName.value = state.guestName;
-  renderGuestBySelect();
+  guestByPicker.setValue(state.guestBy);
   checkInPicker.setValue(state.checkInDate);
   els.nights.value = state.nights;
   els.villaType.value = state.villaType;
   els.checkOut.value = currentCheckOut() ? formatDisplayDate(currentCheckOut()) : '';
   renderPricing();
   renderRevisions();
-}
-
-// ---------------------------------------------------------------------------
-// Guest By — a staff-editable option list stored in neom_system_settings
-// (see settingsService.js) rather than hardcoded, so new names don't need a
-// code change.
-// ---------------------------------------------------------------------------
-async function loadGuestByOptions() {
-  try {
-    guestByOptions = await settingsService.listGuestByOptions();
-  } catch (err) {
-    toast.error(err.message);
-    guestByOptions = [];
-  }
-  renderGuestBySelect();
-}
-
-function renderGuestBySelect() {
-  const current = state.guestBy;
-  // A value loaded from an older revision might not be in the current
-  // (possibly since-edited) options list — show it anyway rather than
-  // silently blanking the field.
-  const options = current && !guestByOptions.includes(current) ? [current, ...guestByOptions] : guestByOptions;
-
-  els.guestBy.innerHTML = `
-    <option value="">— Select —</option>
-    ${options
-      .map((opt) => `<option value="${escapeHtml(opt)}"${opt === current ? ' selected' : ''}>${escapeHtml(opt)}</option>`)
-      .join('')}
-    <option value="${ADD_NEW_GUEST_BY_VALUE}">+ Add new…</option>
-  `;
-}
-
-function openAddGuestByModal() {
-  const body = document.createElement('div');
-  body.innerHTML = `
-    <div class="field">
-      <label class="field-label" for="new-guest-by-name">Name</label>
-      <input class="input" type="text" id="new-guest-by-name" placeholder="e.g. Faisal" autocomplete="off" />
-    </div>
-    <div class="field-error" id="new-guest-by-error" style="display:none;"></div>
-  `;
-
-  const footer = document.createElement('div');
-  footer.style.display = 'flex';
-  footer.style.gap = '8px';
-  footer.innerHTML = `
-    <button type="button" class="btn btn-secondary" id="new-guest-by-cancel">Cancel</button>
-    <button type="button" class="btn btn-primary" id="new-guest-by-save">Add</button>
-  `;
-
-  const dialog = openModal({
-    title: 'Add Guest By Option',
-    bodyEl: body,
-    footerEl: footer,
-    // Covers both Cancel and backing out via Escape/backdrop click — either
-    // way, the select must fall back off "+ Add new…" to whatever was
-    // actually chosen before (state.guestBy is untouched in that case).
-    onClose: () => renderGuestBySelect()
-  });
-
-  const nameInput = body.querySelector('#new-guest-by-name');
-  const errorEl = body.querySelector('#new-guest-by-error');
-  const saveBtn = footer.querySelector('#new-guest-by-save');
-
-  footer.querySelector('#new-guest-by-cancel').addEventListener('click', () => dialog.close());
-
-  saveBtn.addEventListener('click', async () => {
-    const name = nameInput.value.trim();
-    if (!name) {
-      errorEl.textContent = 'Enter a name first.';
-      errorEl.style.display = 'block';
-      return;
-    }
-    saveBtn.disabled = true;
-    saveBtn.classList.add('is-loading');
-    try {
-      const added = await settingsService.addGuestByOption(name);
-      guestByOptions = [...guestByOptions, added];
-      state.guestBy = added;
-      toast.success(`"${added}" added to Guest By.`);
-      dialog.close();
-    } catch (err) {
-      errorEl.textContent = err.message;
-      errorEl.style.display = 'block';
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.classList.remove('is-loading');
-    }
-  });
-
-  nameInput.focus();
 }
 
 function renderPricing() {
@@ -326,13 +230,13 @@ function renderPricing() {
 
   host.innerHTML = `
     <div class="table-wrap">
-      <table class="data-table pricing-table">
+      <table class="data-table pricing-table stacked-table">
         <thead>
           <tr><th>Period</th><th>Season</th><th class="text-right">Nights</th><th class="text-right">Rate / Night</th><th class="text-right">Amount</th></tr>
         </thead>
         <tbody>${rowsHtml}</tbody>
         <tfoot>
-          <tr><td colspan="4" class="pricing-total-label">Total</td><td class="text-right" data-label="Total">${formatIDR(total)}</td></tr>
+          <tr><td colspan="4" class="stacked-table-omit-label">Total</td><td class="text-right" data-label="Total">${formatIDR(total)}</td></tr>
         </tfoot>
       </table>
     </div>
@@ -729,7 +633,7 @@ function template() {
 
             <div class="field" id="field-guest-by">
               <label class="field-label" for="guest-by">Guest By</label>
-              <select class="input" id="guest-by"></select>
+              <div id="guest-by-slot"></div>
             </div>
 
             <div class="field-group-title">Stay</div>

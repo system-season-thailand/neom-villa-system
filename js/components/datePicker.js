@@ -139,6 +139,20 @@ export function createDatePicker({ value: initialValue, disabledDates = new Set(
     setValue: (v) => {
       value = v || '';
       syncTriggerLabel();
-    }
+      // Keep the popover's own page in sync with the new value — without
+      // this, a picker whose value was set programmatically (the Summary
+      // tab's month-switcher does this on every prev/next click) would open
+      // showing whichever month it was last constructed or navigated to,
+      // not the month the new value is actually in.
+      if (value) {
+        const refDate = parseISO(value);
+        year = refDate.getFullYear();
+        month = refDate.getMonth();
+      }
+    },
+    // Lets a caller open this picker programmatically — e.g. jumping
+    // straight to the End/To field's picker right after a Start/From date is
+    // picked, instead of making staff click it themselves.
+    open
   };
 }

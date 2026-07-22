@@ -76,6 +76,7 @@
 .calendar-cell.is-empty {
   border: none;
   background: transparent;
+  cursor: default;
 }
 /* These cells only exist to pad the grid out to full weeks — the number is
    the adjacent month's date, not this month's, so showing it invites
@@ -315,6 +316,25 @@
   font-size: 12px;
 }
 
+.status-popover-booked-by {
+  padding: 6px 8px 2px;
+}
+
+.status-popover-booked-by-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 3px;
+}
+
+.status-popover-booked-by select.input {
+  height: 32px;
+  font-size: 12px;
+}
+
 .status-popover-linked {
   display: flex;
   align-items: center;
@@ -435,6 +455,9 @@
      rule — this input sets its own smaller size, so it needs its own
      override here rather than inheriting that one. */
   .status-popover-notes-input {
+    font-size: 16px;
+  }
+  .status-popover-booked-by select.input {
     font-size: 16px;
   }
 }

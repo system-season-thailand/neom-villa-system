@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="css/invoice.css" />
 <link rel="stylesheet" href="css/prices.css" />
 <link rel="stylesheet" href="css/availability.css" />
+<link rel="stylesheet" href="css/summary.css" />
 <link rel="stylesheet" href="css/auth.css" />
 </head>
 <body>
@@ -59,12 +60,17 @@
       <span class="tab-btn-ar">توافرات</span>
       <span class="tab-btn-en">Availability</span>
     </button>
+    <button class="tab-btn" type="button" data-tab="summary" role="tab" aria-selected="false" aria-controls="tab-summary">
+      <span class="tab-btn-ar">ملخص</span>
+      <span class="tab-btn-en">Summary</span>
+    </button>
   </nav>
 
   <main class="tab-content">
     <section id="tab-invoice" class="tab-panel active" data-panel="invoice" role="tabpanel"></section>
     <section id="tab-prices" class="tab-panel" data-panel="prices" role="tabpanel" hidden></section>
     <section id="tab-availability" class="tab-panel" data-panel="availability" role="tabpanel" hidden></section>
+    <section id="tab-summary" class="tab-panel" data-panel="summary" role="tabpanel" hidden></section>
   </main>
 </div>
 

@@ -64,6 +64,13 @@ export function openModal({ title, bodyEl, footerEl, size = 'md', onClose } = {}
   backdrop.addEventListener('click', (event) => {
     if (event.target === backdrop) close();
   });
+  // Without this, a click anywhere inside the modal bubbles all the way up
+  // to document — harmless most of the time, but it incorrectly triggers
+  // any unrelated "click outside this closes it" listener elsewhere on the
+  // page, e.g. the Availability tab's status popover, which is exactly what
+  // happens when a modal (like the Booked By dropdown's "Manage list…")
+  // gets opened from a control that itself lives inside that popover.
+  modal.addEventListener('click', (event) => event.stopPropagation());
   closeBtn.addEventListener('click', close);
   document.addEventListener('keydown', onKeydown);
 

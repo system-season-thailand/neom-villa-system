@@ -1,0 +1,86 @@
+/* ---------------------------------------------------------------------- */
+/* Date filter row — a month-switcher by default (fast month-to-month
+   browsing), replaced by the From/To pickers when "Custom" is toggled. */
+/* ---------------------------------------------------------------------- */
+.summary-range-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.summary-month-switcher,
+.summary-custom-range {
+  flex: 1;
+  min-width: 220px;
+}
+
+.summary-month-switcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Matches the .input height it visually replaces, so the row doesn't
+     jump when toggling between month-switcher and Custom mode. */
+  height: 38px;
+}
+
+.summary-month-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 130px;
+  text-align: center;
+}
+
+.summary-custom-range {
+  margin-bottom: 0;
+}
+
+#summary-mode-toggle {
+  flex: 0 0 auto;
+  align-self: flex-end;
+}
+
+.summary-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.summary-stats-row {
+  margin-top: 4px;
+}
+
+/* Deliberately plain text, not another stat box — the villa guard's 1% cut
+   is minor/secondary info next to nights, revenue, and commission above. */
+.summary-guard-note {
+  font-size: 12px;
+  margin: -8px 0 18px;
+}
+
+@media (max-width: 640px) {
+  .summary-presets .btn {
+    flex: 1 1 calc(50% - 4px);
+  }
+}
+
+/* Desktop-only column alignment for the By Booker table — Booker stays
+   left, Nights/Revenue/Commission are centered for easier scanning, Guard
+   Cut sits at the left since it's secondary info, not part of that visual
+   grouping. Scoped above the .stacked-table breakpoint on purpose: the
+   mobile stacked-card layout already reads well as-is and isn't touched. */
+@media (min-width: 641px) {
+  #summary-booker-table th:nth-child(2),
+  #summary-booker-table th:nth-child(3),
+  #summary-booker-table th:nth-child(4),
+  #summary-booker-table td:nth-child(2),
+  #summary-booker-table td:nth-child(3),
+  #summary-booker-table td:nth-child(4) {
+    text-align: center;
+  }
+  #summary-booker-table th:nth-child(5),
+  #summary-booker-table td:nth-child(5) {
+    text-align: left;
+  }
+}
