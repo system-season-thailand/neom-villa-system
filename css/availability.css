@@ -87,6 +87,14 @@
 
 .calendar-cell.is-editable {
   cursor: pointer;
+  /* Selection is entered via a long-press (touch) or double-click (mouse) —
+     without these, a long-press triggers the OS text-selection callout/
+     magnifier instead of (or as well as) our own gesture, and a fast
+     double-tap can register as a zoom gesture instead of a dblclick. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .calendar-cell.is-editable:hover {
   border-color: var(--accent);
@@ -221,16 +229,15 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* Bulk "select multiple" mode */
+/* Bulk "select multiple" mode — entered via long-press/double-click on a
+   cell (see attachCellInteractions() in availabilityTab.js), not a button */
 /* ---------------------------------------------------------------------- */
-.calendar-select-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 10px;
-}
-
+/* A sibling of .card-body, not a child of it (see template() in
+   availabilityTab.js) — so toggling it never shifts the toolbar/grid above
+   it. The side/bottom margins stand in for .card-body's own padding so it
+   still lines up visually, since it no longer inherits that padding box. */
 .calendar-actions {
-  margin-bottom: 12px;
+  margin: 0 20px 20px;
   padding: 10px 12px;
   background: var(--accent-soft);
   border: 1px solid var(--accent);
@@ -264,6 +271,12 @@
 .bulk-action-btn .legend-swatch {
   width: 8px;
   height: 8px;
+}
+
+/* Pushed to the far end of the (wrapping) bar, on both desktop and mobile —
+   see the mobile block below for how the two lines split on narrow screens. */
+#bulk-cancel {
+  margin-left: auto;
 }
 
 /* Status picker popover */
@@ -358,6 +371,7 @@
   }
 
   .calendar-actions {
+    margin: 0 12px 12px;
     padding: 8px;
   }
   .bulk-actions-bar {

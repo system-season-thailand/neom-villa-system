@@ -4,15 +4,11 @@ import { createDatePicker } from './datePicker.js';
 import { toISO, parseISO, monthLabel } from '../utils/dateUtils.js';
 import { formatIDR } from '../utils/format.js';
 
-// Each preset also says which filter-row mode it makes sense to land on —
-// "This Month"/"Last Month" are single months (the month-switcher can show
-// them directly), "This Year"/"All Time" aren't, so those switch to the
-// explicit From/To view instead of showing a misleading single-month label.
 const PRESETS = [
-  { key: 'this_month', label: 'This Month', mode: 'month' },
-  { key: 'last_month', label: 'Last Month', mode: 'month' },
-  { key: 'this_year', label: 'This Year', mode: 'custom' },
-  { key: 'all_time', label: 'All Time', mode: 'custom' }
+  { key: 'this_month', label: 'This Month' },
+  { key: 'last_month', label: 'Last Month' },
+  { key: 'this_year', label: 'This Year' },
+  { key: 'all_time', label: 'All Time' }
 ];
 
 let els = {};
@@ -49,12 +45,9 @@ export function mount(container) {
   container.innerHTML = template();
   els = {
     root: container,
-    monthSwitcher: container.querySelector('#summary-month-switcher'),
     monthLabel: container.querySelector('#summary-month-label'),
     monthPrev: container.querySelector('#summary-month-prev'),
     monthNext: container.querySelector('#summary-month-next'),
-    customRange: container.querySelector('#summary-custom-range'),
-    modeToggle: container.querySelector('#summary-mode-toggle'),
     fromSlot: container.querySelector('#summary-from-slot'),
     toSlot: container.querySelector('#summary-to-slot'),
     presetsRow: container.querySelector('#summary-presets'),
@@ -69,12 +62,13 @@ export function mount(container) {
   };
 
   const initial = rangeForPreset('this_month');
-  state = { from: initial.from, to: initial.to, mode: 'month', loading: true, data: null };
+  state = { from: initial.from, to: initial.to, loading: true, data: null };
 
   fromPicker = createDatePicker({
     value: state.from,
     onChange: (value) => {
       state.from = value;
+      updateMonthLabel();
       load();
       // Faster UX for picking a custom range: go straight into the To
       // field's picker instead of making staff click it themselves.
@@ -97,7 +91,6 @@ export function mount(container) {
 
   els.monthPrev.addEventListener('click', () => navigateMonth(-1));
   els.monthNext.addEventListener('click', () => navigateMonth(1));
-  els.modeToggle.addEventListener('click', () => setMode(state.mode === 'month' ? 'custom' : 'month'));
   els.refreshBtn.addEventListener('click', () => load());
 
   els.presetsRow.querySelectorAll('[data-preset]').forEach((btn) => {
@@ -106,20 +99,20 @@ export function mount(container) {
       const { from, to } = rangeForPreset(preset.key);
       state.from = from;
       state.to = to;
-      state.mode = preset.mode;
       fromPicker.setValue(from);
       toPicker.setValue(to);
-      renderModeUI();
+      updateMonthLabel();
       load();
     });
   });
 
-  renderModeUI();
+  updateMonthLabel();
   load();
 }
 
 /** Jumps the month-switcher a month at a time — the fast path for browsing
- * month to month, vs. picking an arbitrary range in Custom mode below. */
+ * month to month, vs. picking an arbitrary range by hand in the From/To
+ * fields next to it. */
 function navigateMonth(delta) {
   const d = parseISO(state.from);
   let year = d.getFullYear();
@@ -136,37 +129,17 @@ function navigateMonth(delta) {
   state.to = to;
   fromPicker.setValue(from);
   toPicker.setValue(to);
-  renderModeUI();
+  updateMonthLabel();
   load();
 }
 
-function setMode(mode) {
-  if (state.mode === mode) return;
-  state.mode = mode;
-  if (mode === 'month') {
-    // Custom mode's range isn't necessarily a whole month — snap to the
-    // month containing whatever "From" currently is, rather than showing a
-    // month-switcher label that doesn't actually match the loaded data.
-    const d = parseISO(state.from);
-    const { from, to } = monthRange(d.getFullYear(), d.getMonth());
-    state.from = from;
-    state.to = to;
-    fromPicker.setValue(from);
-    toPicker.setValue(to);
-    load();
-  }
-  renderModeUI();
-}
-
-function renderModeUI() {
-  const isMonth = state.mode === 'month';
-  els.monthSwitcher.hidden = !isMonth;
-  els.customRange.hidden = isMonth;
-  els.modeToggle.textContent = isMonth ? 'Custom' : 'Month';
-  if (isMonth) {
-    const d = parseISO(state.from);
-    els.monthLabel.textContent = monthLabel(d.getFullYear(), d.getMonth());
-  }
+/** The month-switcher's label always tracks whatever "From" currently is —
+ * exact for a clean single-month range, an approximate "where am I" anchor
+ * otherwise (e.g. after "This Year"/"All Time" or a hand-picked range), with
+ * the From/To fields right next to it for the exact boundaries either way. */
+function updateMonthLabel() {
+  const d = parseISO(state.from);
+  els.monthLabel.textContent = monthLabel(d.getFullYear(), d.getMonth());
 }
 
 async function load() {
@@ -234,9 +207,9 @@ function renderMonthTable(byMonth) {
   }
   return `
     <div class="table-wrap">
-      <table class="data-table stacked-table">
+      <table class="data-table stacked-table" id="summary-month-table">
         <thead>
-          <tr><th>Month</th><th class="text-right">Nights</th><th class="text-right">Revenue</th></tr>
+          <tr><th>Month</th><th>Nights</th><th>Revenue</th></tr>
         </thead>
         <tbody>
           ${byMonth
@@ -244,8 +217,8 @@ function renderMonthTable(byMonth) {
               (m) => `
             <tr>
               <td data-label="Month">${escapeHtml(monthKeyLabel(m.month))}</td>
-              <td class="text-right num" data-label="Nights">${m.nights}</td>
-              <td class="text-right num" data-label="Revenue">${formatIDR(m.revenue)}</td>
+              <td class="num" data-label="Nights">${m.nights}</td>
+              <td class="num" data-label="Revenue">${formatIDR(m.revenue)}</td>
             </tr>`
             )
             .join('')}
@@ -338,7 +311,7 @@ function template() {
               <div class="summary-month-label" id="summary-month-label"></div>
               <button type="button" class="btn btn-icon btn-secondary" id="summary-month-next" aria-label="Next month">›</button>
             </div>
-            <div class="field-row summary-custom-range" id="summary-custom-range" hidden>
+            <div class="field-row summary-custom-range" id="summary-custom-range">
               <div class="field">
                 <label class="field-label">From</label>
                 <div id="summary-from-slot"></div>
@@ -348,7 +321,6 @@ function template() {
                 <div id="summary-to-slot"></div>
               </div>
             </div>
-            <button type="button" class="btn btn-sm btn-secondary" id="summary-mode-toggle">Custom</button>
           </div>
           <div class="summary-presets" id="summary-presets">
             ${PRESETS.map((p) => `<button type="button" class="btn btn-sm btn-secondary" data-preset="${p.key}">${p.label}</button>`).join('')}

@@ -1,6 +1,7 @@
 /* ---------------------------------------------------------------------- */
-/* Date filter row — a month-switcher by default (fast month-to-month
-   browsing), replaced by the From/To pickers when "Custom" is toggled. */
+/* Date filter row — the month-switcher (quick jump a month at a time) and
+   the From/To pickers (exact custom range) sit side by side, always both
+   visible — no mode toggle between them. */
 /* ---------------------------------------------------------------------- */
 .summary-range-row {
   display: flex;
@@ -19,8 +20,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  /* Matches the .input height it visually replaces, so the row doesn't
-     jump when toggling between month-switcher and Custom mode. */
+  /* Matches the .input height it sits next to, so the row's two halves
+     line up evenly. */
   height: 38px;
 }
 
@@ -34,11 +35,6 @@
 
 .summary-custom-range {
   margin-bottom: 0;
-}
-
-#summary-mode-toggle {
-  flex: 0 0 auto;
-  align-self: flex-end;
 }
 
 .summary-presets {
@@ -63,20 +59,39 @@
   .summary-presets .btn {
     flex: 1 1 calc(50% - 4px);
   }
+
+  /* Stacks to a column instead of the shared .invoice-meta-row's default
+     row layout — these three boxes' values (currency totals) can run long,
+     and three-across on a narrow phone leaves too little room to fit them
+     without cramped wrapping. Scoped to .summary-stats-row specifically so
+     the Invoice tab's own .invoice-meta-row usage is untouched. */
+  .summary-stats-row {
+    flex-direction: column;
+  }
+  .summary-stats-row .invoice-meta-box {
+    flex: none;
+  }
 }
 
-/* Desktop-only column alignment for the By Booker table — Booker stays
-   left, Nights/Revenue/Commission are centered for easier scanning, Guard
-   Cut sits at the left since it's secondary info, not part of that visual
-   grouping. Scoped above the .stacked-table breakpoint on purpose: the
-   mobile stacked-card layout already reads well as-is and isn't touched. */
+/* Desktop-only column alignment, matching between the By Booker and By
+   Month tables — the first column (Booker / Month) stays left, the numeric
+   columns after it (Nights/Revenue/Commission, or just Nights/Revenue for
+   By Month) are centered for easier scanning, and the By Booker table's
+   trailing Guard Cut column sits at the left since it's secondary info, not
+   part of that visual grouping. Scoped above the .stacked-table breakpoint
+   on purpose: the mobile stacked-card layout already reads well as-is and
+   isn't touched. */
 @media (min-width: 641px) {
   #summary-booker-table th:nth-child(2),
   #summary-booker-table th:nth-child(3),
   #summary-booker-table th:nth-child(4),
   #summary-booker-table td:nth-child(2),
   #summary-booker-table td:nth-child(3),
-  #summary-booker-table td:nth-child(4) {
+  #summary-booker-table td:nth-child(4),
+  #summary-month-table th:nth-child(2),
+  #summary-month-table th:nth-child(3),
+  #summary-month-table td:nth-child(2),
+  #summary-month-table td:nth-child(3) {
     text-align: center;
   }
   #summary-booker-table th:nth-child(5),

@@ -39,14 +39,12 @@ export function mount(container, options = {}) {
     actions: container.querySelector('#calendar-actions'),
     btnPrev: container.querySelector('#calendar-prev'),
     btnNext: container.querySelector('#calendar-next'),
-    btnToday: container.querySelector('#calendar-today'),
-    btnSelectToggle: container.querySelector('#calendar-select-toggle')
+    btnToday: container.querySelector('#calendar-today')
   };
 
   els.btnPrev.addEventListener('click', () => navigate(-1));
   els.btnNext.addEventListener('click', () => navigate(1));
   els.btnToday.addEventListener('click', goToToday);
-  els.btnSelectToggle?.addEventListener('click', toggleSelectMode);
 
   document.addEventListener('click', handleOutsideClick);
   document.addEventListener('keydown', handleEscape);
@@ -168,6 +166,17 @@ function findLinkedStayForDate(dateISO) {
   return state.linkedStays.find((g) => g.startDate <= dateISO && dateISO <= g.endDate) || null;
 }
 
+/** Existing linked-stay groups that overlap OR directly touch [startISO, endISO] —
+ * either way, inserting a new range spanning both would collide with the
+ * database's own exclusion constraint (which only allows one row to occupy
+ * any given date). openLinkDatesModal() uses this to fold such groups into
+ * one merged stay instead of failing with that constraint's error. */
+function findMergeableLinkedStays(startISO, endISO) {
+  return state.linkedStays.filter(
+    (g) => g.startDate <= addDays(endISO, 1) && startISO <= addDays(g.endDate, 1)
+  );
+}
+
 /** The `neom_price` exclusion constraint guarantees ranges never overlap, so at most one rule can match. */
 function findPriceForDate(dateISO) {
   return state.priceRules.find((r) => r.startDate <= dateISO && dateISO <= r.endDate) || null;
@@ -189,11 +198,14 @@ function renderBookerLine(info) {
 }
 
 // ---------------------------------------------------------------------------
-// Bulk "select multiple" mode
+// Bulk "select multiple" mode — entered via a long-press (touch) or
+// double-click (mouse) on any editable cell rather than a dedicated toggle
+// button; exited via the ✕ button in the actions bar or by deselecting back
+// down to zero dates.
 // ---------------------------------------------------------------------------
-function toggleSelectMode() {
-  state.selectMode = !state.selectMode;
-  state.selectedDates.clear();
+function enterSelectModeWithDate(dateISO) {
+  state.selectMode = true;
+  state.selectedDates.add(dateISO);
   closePopover();
   render();
 }
@@ -204,19 +216,50 @@ function toggleDateSelection(dateISO) {
   } else {
     state.selectedDates.add(dateISO);
   }
+  if (state.selectedDates.size === 0) {
+    state.selectMode = false;
+  }
   render();
 }
 
+function clearSelection() {
+  state.selectedDates.clear();
+  state.selectMode = false;
+}
+
+/** Every ISO date from startISO to endISO, inclusive. */
+function datesInRange(startISO, endISO) {
+  const dates = [];
+  let cursor = startISO;
+  while (cursor <= endISO) {
+    dates.push(cursor);
+    cursor = addDays(cursor, 1);
+  }
+  return dates;
+}
+
 /**
- * Applies one status to every selected date at once. Merges the rows the
- * upsert itself returns straight into local state and repaints synchronously
- * — no follow-up fetch, so there's no loading-skeleton flash for what's
- * already-known data. Linked-stay markers and price rules are untouched by
- * a status change, so nothing else needs to be refetched either.
+ * Applies one status to every selected date at once — plus every date in
+ * any linked-stay group a selected date belongs to, even if not itself
+ * selected, so a status change never leaves part of a linked group behind.
+ * Merges the rows the upsert itself returns straight into local state and
+ * repaints synchronously — no follow-up fetch, so there's no loading-
+ * skeleton flash for what's already-known data. Linked-stay markers and
+ * price rules are untouched by a status change, so nothing else needs to be
+ * refetched either.
  */
 async function applyBulkStatus(status, bookedBy = '') {
-  const dates = Array.from(state.selectedDates);
-  if (!dates.length) return;
+  const selected = Array.from(state.selectedDates);
+  if (!selected.length) return;
+
+  const dateSet = new Set(selected);
+  for (const dateISO of selected) {
+    const linked = findLinkedStayForDate(dateISO);
+    if (linked) {
+      for (const d of datesInRange(linked.startDate, linked.endDate)) dateSet.add(d);
+    }
+  }
+  const dates = Array.from(dateSet);
 
   try {
     const updatedRows = await availabilityService.setStatusBulk(dates, status, '', bookedBy);
@@ -224,7 +267,7 @@ async function applyBulkStatus(status, bookedBy = '') {
       state.statuses.set(row.date, row);
     }
     toast.success(`${dates.length} date${dates.length === 1 ? '' : 's'} marked as ${STATUSES[status].label}.`);
-    state.selectedDates.clear();
+    clearSelection();
     render();
   } catch (err) {
     toast.error(err.message);
@@ -245,6 +288,13 @@ function datesAreContiguous(sortedIsoDates) {
  * booking flow in this app for it to actually enforce — staff still set
  * each date's status independently — so this is a heads-up for whoever's
  * reading the calendar, not a hard lock.
+ *
+ * If the selection overlaps or directly touches one or more existing linked
+ * groups, this merges them all into one bigger group spanning the full
+ * range instead of trying (and failing, on the database's own exclusion
+ * constraint) to insert a second, colliding row. That's also why a single
+ * selected date is enough to open this — extending an existing stay by one
+ * night at either end is exactly this same "merge" case.
  */
 function openLinkDatesModal() {
   const dates = Array.from(state.selectedDates).sort();
@@ -253,18 +303,29 @@ function openLinkDatesModal() {
     return;
   }
 
-  const startDate = dates[0];
-  const endDate = dates[dates.length - 1];
+  const selectedStart = dates[0];
+  const selectedEnd = dates[dates.length - 1];
+  const mergeable = findMergeableLinkedStays(selectedStart, selectedEnd);
+  const isMerge = mergeable.length > 0;
+
+  const startDate = mergeable.reduce((min, g) => (g.startDate < min ? g.startDate : min), selectedStart);
+  const endDate = mergeable.reduce((max, g) => (g.endDate > max ? g.endDate : max), selectedEnd);
+  const nightCount = datesInRange(startDate, endDate).length;
+  const existingNote = mergeable.find((g) => g.note)?.note || '';
 
   const body = document.createElement('div');
   body.innerHTML = `
     <p style="font-size:13.5px;color:var(--text-secondary);margin:0 0 12px;">
-      ${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)} (${dates.length} nights) will be marked
+      ${
+        isMerge
+          ? `This touches ${mergeable.length === 1 ? 'an existing linked stay' : `${mergeable.length} existing linked stays`} — they'll be merged into one: `
+          : ''
+      }${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)} (${nightCount} nights) will be marked
       as one linked stay — the calendar will clearly flag that these dates can't be booked separately.
     </p>
     <div class="field">
       <label class="field-label" for="link-note">Note (optional)</label>
-      <input class="input" type="text" id="link-note" placeholder="e.g. Min 3 nights — New Year's package" />
+      <input class="input" type="text" id="link-note" placeholder="e.g. Min 3 nights — New Year's package" value="${escapeAttr(existingNote)}" />
     </div>
   `;
 
@@ -273,7 +334,7 @@ function openLinkDatesModal() {
   footer.style.gap = '8px';
   footer.innerHTML = `
     <button type="button" class="btn btn-secondary" id="link-cancel">Cancel</button>
-    <button type="button" class="btn btn-primary" id="link-confirm">Link These Dates</button>
+    <button type="button" class="btn btn-primary" id="link-confirm">${isMerge ? 'Merge & Link' : 'Link These Dates'}</button>
   `;
 
   const dialog = openModal({ title: '🔗 Link Dates as One Stay', bodyEl: body, footerEl: footer });
@@ -281,11 +342,23 @@ function openLinkDatesModal() {
   footer.querySelector('#link-confirm').addEventListener('click', async () => {
     const note = body.querySelector('#link-note').value;
     try {
-      await linkedStayService.createLinkedStay({ startDate, endDate, note });
-      toast.success(`${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)} linked as one stay.`);
+      if (isMerge) {
+        // The exclusion constraint would reject the merged insert below
+        // while any of these still exist, so they have to go first.
+        await Promise.all(mergeable.map((g) => linkedStayService.deleteLinkedStay(g.id)));
+        const mergedIds = new Set(mergeable.map((g) => g.id));
+        state.linkedStays = state.linkedStays.filter((g) => !mergedIds.has(g.id));
+      }
+      const created = await linkedStayService.createLinkedStay({ startDate, endDate, note });
+      state.linkedStays.push(created);
+      toast.success(
+        isMerge
+          ? `Merged into one linked stay: ${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)}.`
+          : `${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)} linked as one stay.`
+      );
       dialog.close();
-      state.selectedDates.clear();
-      load();
+      clearSelection();
+      render();
     } catch (err) {
       toast.error(err.message);
     }
@@ -300,7 +373,14 @@ function renderActionsBar() {
   }
 
   els.actions.hidden = false;
-  const count = state.selectedDates.size;
+  const selected = Array.from(state.selectedDates);
+  const count = selected.length;
+  // Normally linking needs 2+ dates, but a single selected date is also
+  // enough when it touches/overlaps an existing linked stay — that's just
+  // extending that stay by one night, the same "merge" openLinkDatesModal()
+  // already handles.
+  const canLink =
+    count >= 2 || (count === 1 && findMergeableLinkedStays(selected[0], selected[0]).length > 0);
 
   els.actions.innerHTML = `
     <div class="bulk-actions-bar">
@@ -313,12 +393,11 @@ function renderActionsBar() {
             ${STATUSES[key].label}
           </button>`
         ).join('')}
-        <button type="button" class="btn btn-sm btn-secondary bulk-action-btn" id="bulk-link" ${count < 2 ? 'disabled' : ''}>
+        <button type="button" class="btn btn-sm btn-secondary bulk-action-btn" id="bulk-link" ${canLink ? '' : 'disabled'}>
           🔗 Link Nights
         </button>
-        <button type="button" class="btn btn-sm btn-ghost" id="bulk-clear" ${count ? '' : 'disabled'}>Clear</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="bulk-done">Done</button>
       </div>
+      <button type="button" class="btn btn-icon btn-ghost" id="bulk-cancel" aria-label="Cancel selection" title="Cancel selection">✕</button>
     </div>
   `;
 
@@ -336,14 +415,10 @@ function renderActionsBar() {
     event.stopPropagation();
     openLinkDatesModal();
   });
-  els.actions.querySelector('#bulk-clear').addEventListener('click', (event) => {
+  els.actions.querySelector('#bulk-cancel').addEventListener('click', (event) => {
     event.stopPropagation();
-    state.selectedDates.clear();
+    clearSelection();
     render();
-  });
-  els.actions.querySelector('#bulk-done').addEventListener('click', (event) => {
-    event.stopPropagation();
-    toggleSelectMode();
   });
 }
 
@@ -352,9 +427,6 @@ function render() {
   closePopover();
 
   if (!state.readOnly) {
-    els.btnSelectToggle.textContent = state.selectMode ? 'Cancel Selecting' : 'Select Multiple';
-    els.btnSelectToggle.classList.toggle('btn-primary', state.selectMode);
-    els.btnSelectToggle.classList.toggle('btn-secondary', !state.selectMode);
     renderActionsBar();
   }
 
@@ -406,15 +478,67 @@ function render() {
   els.grid.innerHTML =
     WEEKDAYS.map((w) => `<div class="calendar-weekday">${w}</div>`).join('') + cellsHtml;
 
-  els.grid.querySelectorAll('.calendar-cell.is-editable').forEach((cell) => {
-    cell.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (state.selectMode) {
-        toggleDateSelection(cell.dataset.date);
-      } else {
-        openPopover(cell);
-      }
-    });
+  els.grid.querySelectorAll('.calendar-cell.is-editable').forEach(attachCellInteractions);
+}
+
+const LONG_PRESS_MS = 500;
+
+/**
+ * Wires up a calendar cell's whole interaction set: a plain click (open the
+ * status popover, or toggle this date's selection if already in select
+ * mode), a long-press (touch devices — enters select mode with this date
+ * selected), and a double-click (mouse — same, for desktop). There's no
+ * dedicated "Select Multiple" button any more; this is the only way in.
+ * The long-press/double-click path briefly opens (and, for double-click,
+ * immediately closes again via the popover's own same-cell toggle) the
+ * status popover before entering select mode — a harmless side effect of
+ * layering this on top of the plain click handler rather than a real bug.
+ */
+function attachCellInteractions(cell) {
+  const dateISO = cell.dataset.date;
+  let longPressTimer = null;
+  let longPressFired = false;
+
+  cell.addEventListener(
+    'touchstart',
+    () => {
+      longPressFired = false;
+      longPressTimer = setTimeout(() => {
+        longPressFired = true;
+        enterSelectModeWithDate(dateISO);
+      }, LONG_PRESS_MS);
+    },
+    { passive: true }
+  );
+
+  const cancelLongPress = () => clearTimeout(longPressTimer);
+  cell.addEventListener('touchmove', cancelLongPress);
+  cell.addEventListener('touchcancel', cancelLongPress);
+  cell.addEventListener('touchend', (event) => {
+    cancelLongPress();
+    if (longPressFired) {
+      // The long-press already handled this tap — swallow the click the
+      // touch gesture would otherwise still fire once the finger lifts.
+      event.preventDefault();
+    }
+  });
+
+  cell.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (longPressFired) {
+      longPressFired = false;
+      return;
+    }
+    if (state.selectMode) {
+      toggleDateSelection(dateISO);
+    } else {
+      openPopover(cell);
+    }
+  });
+
+  cell.addEventListener('dblclick', (event) => {
+    event.stopPropagation();
+    if (!state.selectMode) enterSelectModeWithDate(dateISO);
   });
 }
 
@@ -459,6 +583,10 @@ function openPopover(cellEl) {
 
   popover.querySelector('#popover-unlink')?.addEventListener('click', (event) => {
     event.stopPropagation();
+    // Hide the status-popover first — the confirm dialog it triggers is a
+    // modal, and having the popover still visible behind/alongside it is
+    // just visual noise once the user's focus has moved to that modal.
+    closePopover();
     unlinkStay(linked);
   });
 
@@ -552,15 +680,29 @@ function handleEscape(event) {
 }
 
 /**
- * Merges the upsert's own returned row straight into local state and
+ * Merges the upsert's own returned row(s) straight into local state and
  * repaints synchronously — no follow-up fetch, so there's no loading-
- * skeleton flash for data the mutation itself already handed back.
+ * skeleton flash for data the mutation itself already handed back. If this
+ * date is part of a linked-stay group, the same status/notes/bookedBy is
+ * applied to every date in that group, not just the one that was clicked —
+ * a linked group is meant to move as one, so a status change on any single
+ * night in it shouldn't leave the rest behind.
  */
 async function saveStatus(dateISO, status, notes, bookedBy) {
   try {
-    const updated = await availabilityService.setStatus(dateISO, status, notes, bookedBy);
-    state.statuses.set(dateISO, updated);
-    toast.success(`${dateISO} marked as ${STATUSES[status].label}.`);
+    const linked = findLinkedStayForDate(dateISO);
+    if (linked) {
+      const dates = datesInRange(linked.startDate, linked.endDate);
+      const updatedRows = await availabilityService.setStatusBulk(dates, status, notes, bookedBy);
+      for (const row of updatedRows) {
+        state.statuses.set(row.date, row);
+      }
+      toast.success(`${dates.length} linked dates marked as ${STATUSES[status].label}.`);
+    } else {
+      const updated = await availabilityService.setStatus(dateISO, status, notes, bookedBy);
+      state.statuses.set(dateISO, updated);
+      toast.success(`${dateISO} marked as ${STATUSES[status].label}.`);
+    }
     closePopover();
     render();
   } catch (err) {
@@ -579,9 +721,10 @@ async function unlinkStay(linked) {
 
   try {
     await linkedStayService.deleteLinkedStay(linked.id);
+    state.linkedStays = state.linkedStays.filter((g) => g.id !== linked.id);
     toast.success('Dates unlinked.');
     closePopover();
-    load();
+    render();
   } catch (err) {
     toast.error(err.message);
   }
@@ -628,18 +771,9 @@ function template(readOnly) {
               <span class="legend-item">🔗 Must book together</span>
             </div>
           </div>
-          ${
-            readOnly
-              ? ''
-              : `
-          <div class="calendar-select-row">
-            <button class="btn btn-sm btn-secondary" id="calendar-select-toggle" type="button">Select Multiple</button>
-          </div>
-          <div class="calendar-actions" id="calendar-actions" hidden></div>
-          `
-          }
           <div class="calendar-grid${readOnly ? ' calendar-grid--priced' : ''}" id="calendar-grid"></div>
         </div>
+        ${readOnly ? '' : `<div class="calendar-actions" id="calendar-actions" hidden></div>`}
       </div>
     </div>
   `;
