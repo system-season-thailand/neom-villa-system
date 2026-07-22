@@ -21,8 +21,16 @@ document.addEventListener('click', closeActiveDatePicker);
  * out specific dates, e.g. ones some other pricing rule already covers —
  * omit it (or pass an empty Set) for a picker that should allow every date,
  * like the Invoice tab's check-in field.
+ *
+ * Pass `getReferenceValue` (a function returning an ISO date string, or a
+ * falsy value) for a picker that should open on *another* field's month
+ * rather than today's — e.g. the Prices tab's End Date picker opens on
+ * Start Date's month, so staff picking a multi-week range don't have to
+ * page forward manually every time. Only takes effect while this picker's
+ * own value is still empty — once it has a value, opening it always shows
+ * its own selected month, same as before.
  */
-export function createDatePicker({ value: initialValue, disabledDates = new Set(), onChange } = {}) {
+export function createDatePicker({ value: initialValue, disabledDates = new Set(), onChange, getReferenceValue } = {}) {
   let value = initialValue || '';
   const refDate = value ? parseISO(value) : new Date();
   let year = refDate.getFullYear();
@@ -47,6 +55,12 @@ export function createDatePicker({ value: initialValue, disabledDates = new Set(
 
   function open() {
     closeActiveDatePicker();
+    if (!value) {
+      const ref = getReferenceValue?.();
+      const refDate = ref ? parseISO(ref) : new Date();
+      year = refDate.getFullYear();
+      month = refDate.getMonth();
+    }
     popoverEl = document.createElement('div');
     popoverEl.className = 'date-picker-popover';
     popoverEl.addEventListener('click', (event) => event.stopPropagation());

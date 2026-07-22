@@ -107,6 +107,33 @@ code change. The generic `setting_key` column exists so a future
 staff-editable list (of a different kind) can reuse this same table instead
 of needing a new one.
 
+### `neom_linked_stays` — "must be booked together" date groups
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid, PK | |
+| `start_date` / `end_date` | date | Inclusive on both ends, same convention as `neom_price` |
+| `note` | text | Optional — e.g. `"Min 3 nights — New Year's package"` |
+
+Same GiST exclusion constraint as `neom_price` (`EXCLUDE USING gist
+(daterange(start_date, end_date, '[]') WITH &&)`), so one date can never
+belong to two linked-stay groups at once.
+
+**This is an informational marker, not an enforced booking rule.** The app
+has no guest-facing booking flow to actually block a partial booking against
+— staff still set each date's `neom_availability` status independently, one
+date at a time or via bulk-select. What this table drives is purely the
+Availability calendar's own display: any date inside a linked-stay range
+renders with a violet ring, a 🔗 badge, and a tooltip/popover explaining the
+range and its note (see `findLinkedStayForDate()` in
+`js/components/availabilityTab.js`), so staff assigning dates manually can
+see at a glance that (for example) Dec 29–31 shouldn't be split up. Both
+Admin and User roles see the marker; only Admin can create one (via the
+Availability tab's "Select Multiple" bulk bar → **🔗 Link Nights**, which
+requires the current selection to be a contiguous run of dates) or remove
+one (via the "Unlink" button that appears in a linked date's status
+popover).
+
 ## Revision system
 
 Every PDF download creates a **new row**, never an update. There is no

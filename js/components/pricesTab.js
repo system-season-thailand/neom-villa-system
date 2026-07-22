@@ -223,7 +223,11 @@ async function openPriceForm(existing) {
   `;
 
   const startPicker = createDatePicker({ value: existing?.startDate || '', disabledDates });
-  const endPicker = createDatePicker({ value: existing?.endDate || '', disabledDates });
+  const endPicker = createDatePicker({
+    value: existing?.endDate || '',
+    disabledDates,
+    getReferenceValue: () => startPicker.getValue()
+  });
   body.querySelector('#price-start-slot').appendChild(startPicker.trigger);
   body.querySelector('#price-end-slot').appendChild(endPicker.trigger);
 

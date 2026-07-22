@@ -1,7 +1,7 @@
 // Translates raw PostgREST/Postgres errors into short, staff-facing messages.
 // Falls back to the server-provided message when we don't recognise the code.
 const CODE_MESSAGES = {
-  '23P01': 'That date range overlaps an existing pricing period. Adjust the dates and try again.',
+  '23P01': 'That date range overlaps an existing one. Adjust the dates and try again.',
   '23505': 'That record already exists.',
   '23514': 'One of the values entered does not meet the required constraints.',
   '23503': 'This record is referenced elsewhere and cannot be changed.'

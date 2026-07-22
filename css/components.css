@@ -606,6 +606,15 @@ textarea.input {
     gap: 0;
   }
 
+  /* iOS Safari auto-zooms the whole page on focus if a text input's
+     effective font-size is under 16px — the base 13.5px triggers it on
+     every field in the app. 16px is the documented threshold; below it
+     there's no way to opt out short of user-scalable=no in the viewport
+     meta tag, which would disable pinch-zoom everywhere, a worse trade. */
+  .input, select.input, textarea.input {
+    font-size: 16px;
+  }
+
   .btn {
     height: 34px;
     padding: 0 11px;

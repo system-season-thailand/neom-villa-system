@@ -1,8 +1,10 @@
 import * as availabilityService from '../services/availabilityService.js';
 import { STATUSES } from '../services/availabilityService.js';
 import * as priceService from '../services/priceService.js';
+import * as linkedStayService from '../services/linkedStayService.js';
 import { toast } from './toast.js';
-import { buildMonthMatrix, monthLabel, todayISO, addDays } from '../utils/dateUtils.js';
+import { openModal, confirmDialog } from './modal.js';
+import { buildMonthMatrix, monthLabel, todayISO, addDays, formatDisplayDate } from '../utils/dateUtils.js';
 import { formatIDRShort } from '../utils/format.js';
 
 const EDITABLE_STATUSES = ['available', 'booked', 'on_hold', 'blocked'];
@@ -19,6 +21,7 @@ export function mount(container, options = {}) {
     month: today.getMonth(),
     statuses: new Map(),
     priceRules: [],
+    linkedStays: [],
     loading: true,
     selectMode: false,
     selectedDates: new Set(),
@@ -88,10 +91,25 @@ async function load() {
     toast.error(err.message);
     state.statuses = new Map();
     state.priceRules = [];
-  } finally {
-    state.loading = false;
-    render();
   }
+
+  // Fetched separately from the block above on purpose: this table is newer
+  // than the rest of the schema, so until sql/005 has been run it 404s —
+  // that should leave the calendar's actual statuses working as normal,
+  // just without linked-stay markers, not take down the whole month view.
+  try {
+    state.linkedStays = await linkedStayService.findLinkedStaysForRange(startISO, endISO);
+  } catch {
+    state.linkedStays = [];
+  }
+
+  state.loading = false;
+  render();
+}
+
+/** A linked-stay range never overlaps another (enforced in Postgres), so at most one can match. */
+function findLinkedStayForDate(dateISO) {
+  return state.linkedStays.find((g) => g.startDate <= dateISO && dateISO <= g.endDate) || null;
 }
 
 /** The `neom_price` exclusion constraint guarantees ranges never overlap, so at most one rule can match. */
@@ -139,6 +157,67 @@ async function applyBulkStatus(status) {
   }
 }
 
+function datesAreContiguous(sortedIsoDates) {
+  for (let i = 1; i < sortedIsoDates.length; i++) {
+    if (addDays(sortedIsoDates[i - 1], 1) !== sortedIsoDates[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * "Link" here is purely a visual/informational marker (a distinct border,
+ * badge, and tooltip on the calendar cell — see is-linked in availability.css)
+ * saying these dates must be booked as one stay. There's no guest-facing
+ * booking flow in this app for it to actually enforce — staff still set
+ * each date's status independently — so this is a heads-up for whoever's
+ * reading the calendar, not a hard lock.
+ */
+function openLinkDatesModal() {
+  const dates = Array.from(state.selectedDates).sort();
+  if (!datesAreContiguous(dates)) {
+    toast.error('Selected dates must be consecutive (no gaps) to link them as one stay.');
+    return;
+  }
+
+  const startDate = dates[0];
+  const endDate = dates[dates.length - 1];
+
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <p style="font-size:13.5px;color:var(--text-secondary);margin:0 0 12px;">
+      ${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)} (${dates.length} nights) will be marked
+      as one linked stay — the calendar will clearly flag that these dates can't be booked separately.
+    </p>
+    <div class="field">
+      <label class="field-label" for="link-note">Note (optional)</label>
+      <input class="input" type="text" id="link-note" placeholder="e.g. Min 3 nights — New Year's package" />
+    </div>
+  `;
+
+  const footer = document.createElement('div');
+  footer.style.display = 'flex';
+  footer.style.gap = '8px';
+  footer.innerHTML = `
+    <button type="button" class="btn btn-secondary" id="link-cancel">Cancel</button>
+    <button type="button" class="btn btn-primary" id="link-confirm">Link These Dates</button>
+  `;
+
+  const dialog = openModal({ title: '🔗 Link Dates as One Stay', bodyEl: body, footerEl: footer });
+  footer.querySelector('#link-cancel').addEventListener('click', () => dialog.close());
+  footer.querySelector('#link-confirm').addEventListener('click', async () => {
+    const note = body.querySelector('#link-note').value;
+    try {
+      await linkedStayService.createLinkedStay({ startDate, endDate, note });
+      toast.success(`${formatDisplayDate(startDate)} – ${formatDisplayDate(endDate)} linked as one stay.`);
+      dialog.close();
+      state.selectedDates.clear();
+      load();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  });
+}
+
 function renderActionsBar() {
   if (!state.selectMode) {
     els.actions.hidden = true;
@@ -160,6 +239,9 @@ function renderActionsBar() {
             ${STATUSES[key].label}
           </button>`
         ).join('')}
+        <button type="button" class="btn btn-sm btn-secondary bulk-action-btn" id="bulk-link" ${count < 2 ? 'disabled' : ''}>
+          🔗 Link Nights
+        </button>
         <button type="button" class="btn btn-sm btn-ghost" id="bulk-clear" ${count ? '' : 'disabled'}>Clear</button>
         <button type="button" class="btn btn-sm btn-ghost" id="bulk-done">Done</button>
       </div>
@@ -171,6 +253,10 @@ function renderActionsBar() {
       event.stopPropagation();
       applyBulkStatus(btn.dataset.status);
     });
+  });
+  els.actions.querySelector('#bulk-link').addEventListener('click', (event) => {
+    event.stopPropagation();
+    openLinkDatesModal();
   });
   els.actions.querySelector('#bulk-clear').addEventListener('click', (event) => {
     event.stopPropagation();
@@ -212,12 +298,17 @@ function render() {
       const editable = day.inCurrentMonth && info.status !== 'passed' && !state.readOnly;
       const selected = state.selectedDates.has(day.iso);
       const statusMeta = STATUSES[info.status] || STATUSES.available;
+      const linked = day.inCurrentMonth ? findLinkedStayForDate(day.iso) : null;
+      const linkedTitle = linked
+        ? `Must be booked together: ${formatDisplayDate(linked.startDate)} – ${formatDisplayDate(linked.endDate)}${linked.note ? ' — ' + linked.note : ''}`
+        : '';
       return `
         <button
           type="button"
-          class="calendar-cell${day.inCurrentMonth ? '' : ' is-empty'}${day.iso === today ? ' is-today' : ''}${editable ? ' is-editable' : ''}${selected ? ' is-selected' : ''}"
+          class="calendar-cell${day.inCurrentMonth ? '' : ' is-empty'}${day.iso === today ? ' is-today' : ''}${editable ? ' is-editable' : ''}${selected ? ' is-selected' : ''}${linked ? ' is-linked' : ''}"
           data-date="${day.iso}"
           ${day.inCurrentMonth ? `data-status="${info.status}"` : ''}
+          ${linkedTitle ? `title="${escapeAttr(linkedTitle)}"` : ''}
           ${editable ? '' : 'tabindex="-1" aria-disabled="true"'}
           ${day.inCurrentMonth ? '' : 'disabled'}
         >
@@ -259,6 +350,7 @@ function openPopover(cellEl) {
   closePopover();
 
   const info = state.statuses.get(dateISO) || { status: 'available', notes: '' };
+  const linked = findLinkedStayForDate(dateISO);
   const rect = cellEl.getBoundingClientRect();
 
   const popover = document.createElement('div');
@@ -273,8 +365,16 @@ function openPopover(cellEl) {
       </button>`
     ).join('')}
     <div class="status-popover-notes">
-      <input class="input" type="text" id="popover-notes" placeholder="Optional note" value="${escapeAttr(info.notes)}" style="height:32px;font-size:12px;" />
+      <input class="input status-popover-notes-input" type="text" id="popover-notes" placeholder="Optional note" value="${escapeAttr(info.notes)}" />
     </div>
+    ${
+      linked
+        ? `<div class="status-popover-linked">
+             🔗 ${escapeHtml(formatDisplayDate(linked.startDate))} – ${escapeHtml(formatDisplayDate(linked.endDate))}${linked.note ? ' — ' + escapeHtml(linked.note) : ''}
+             <button type="button" class="btn btn-sm btn-ghost" id="popover-unlink">Unlink</button>
+           </div>`
+        : ''
+    }
   `;
 
   document.body.appendChild(popover);
@@ -283,6 +383,11 @@ function openPopover(cellEl) {
   const left = Math.min(rect.left, window.innerWidth - popover.offsetWidth - 10);
   popover.style.top = `${Math.max(10, top)}px`;
   popover.style.left = `${Math.max(10, left)}px`;
+
+  popover.querySelector('#popover-unlink')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    unlinkStay(linked);
+  });
 
   popover.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', async (event) => {
@@ -323,6 +428,25 @@ async function saveStatus(dateISO, status, notes) {
   }
 }
 
+async function unlinkStay(linked) {
+  const confirmed = await confirmDialog({
+    title: 'Unlink These Dates',
+    message: `Remove the "must be booked together" link for ${formatDisplayDate(linked.startDate)} – ${formatDisplayDate(linked.endDate)}? Each date's own status is unaffected — only the linking goes away.`,
+    confirmLabel: 'Unlink',
+    danger: true
+  });
+  if (!confirmed) return;
+
+  try {
+    await linkedStayService.deleteLinkedStay(linked.id);
+    toast.success('Dates unlinked.');
+    closePopover();
+    load();
+  } catch (err) {
+    toast.error(err.message);
+  }
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;',
@@ -356,6 +480,7 @@ function template(readOnly) {
                     `<span class="legend-item"><span class="legend-swatch" style="background:${meta.color}"></span>${meta.label}</span>`
                 )
                 .join('')}
+              <span class="legend-item">🔗 Must book together</span>
             </div>
           </div>
           ${

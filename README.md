@@ -82,7 +82,8 @@ identically if you ever move off GitHub Pages.
 │   │   ├── invoiceService.js        Invoice numbers, pricing calc, revisions
 │   │   ├── priceService.js          Seasonal pricing CRUD
 │   │   ├── availabilityService.js   Calendar status CRUD (incl. bulk status updates)
-│   │   └── settingsService.js       Staff-editable option lists (Guest By)
+│   │   ├── settingsService.js       Staff-editable option lists (Guest By)
+│   │   └── linkedStayService.js     "Must be booked together" date-group CRUD
 │   ├── components/                 One file per UI feature, each exporting mount(container)
 │   │   ├── invoiceTab.js
 │   │   ├── pricesTab.js

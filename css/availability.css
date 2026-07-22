@@ -192,6 +192,22 @@
   text-align: center;
 }
 
+/* A linked-stay group — see openLinkDatesModal() in availabilityTab.js.
+   An inset ring (not a border-color change) so it never fights with
+   .is-today's border-color or .is-selected's outline; independent enough
+   to combine with either without one visually clobbering another. */
+.calendar-cell.is-linked {
+  box-shadow: inset 0 0 0 2px var(--linked);
+}
+.calendar-cell.is-linked::before {
+  content: '🔗';
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 10px;
+  line-height: 1;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Bulk "select multiple" mode */
 /* ---------------------------------------------------------------------- */
@@ -281,6 +297,28 @@
 
 .status-popover-notes {
   padding: 6px 8px 2px;
+}
+
+.status-popover-notes-input {
+  height: 32px;
+  font-size: 12px;
+}
+
+.status-popover-linked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 8px 2px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--linked-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.status-popover-linked .btn {
+  margin-left: auto;
 }
 
 @media (max-width: 640px) {
@@ -380,5 +418,12 @@
 
   .status-popover {
     width: min(220px, calc(100vw - 20px));
+  }
+
+  /* Same 16px iOS-zoom-threshold fix as components.css's general .input
+     rule — this input sets its own smaller size, so it needs its own
+     override here rather than inheriting that one. */
+  .status-popover-notes-input {
+    font-size: 16px;
   }
 }

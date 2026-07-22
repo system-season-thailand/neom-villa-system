@@ -1,6 +1,6 @@
 # Database setup
 
-Four SQL scripts create everything the app needs: tables, constraints,
+Five SQL scripts create everything the app needs: tables, constraints,
 indexes, triggers, helper functions, and RLS policies. After running them
 the app works immediately — no further database changes are needed.
 
@@ -18,7 +18,8 @@ file.
    2. [`002_create_neom_price.sql`](002_create_neom_price.sql) — seasonal pricing table, with a database-level exclusion constraint that rejects overlapping date ranges.
    3. [`003_create_neom_availability.sql`](003_create_neom_availability.sql) — calendar availability table.
    4. [`004_create_neom_system_settings.sql`](004_create_neom_system_settings.sql) — staff-editable option lists (currently just "Guest By"), seeded with its initial values.
-3. Confirm each script reports success before running the next one — 002, 003, and 004 all call a function defined in 001.
+   5. [`005_create_neom_linked_stays.sql`](005_create_neom_linked_stays.sql) — "must be booked together" date groups for the Availability calendar.
+3. Confirm each script reports success before running the next one — 002, 003, 004, and 005 all call a function defined in 001.
 
 Every statement in every script is idempotent (`CREATE ... IF NOT EXISTS`,
 `DROP POLICY/TRIGGER IF EXISTS` before recreating), so re-running a script —
@@ -32,6 +33,7 @@ or all three — is always safe.
 | `neom_price` | Seasonal nightly rates. A GiST exclusion constraint makes overlapping date ranges impossible to insert. |
 | `neom_availability` | One row per calendar date that has ever been changed from its default. Sparse by design — see the comment at the top of `003_create_neom_availability.sql`. |
 | `neom_system_settings` | Staff-editable option lists, one row per option. Currently powers the Invoice tab's "Guest By" dropdown (`setting_key = 'guest_by'`); the `setting_key` column exists to hold future lists too, without a schema change. |
+| `neom_linked_stays` | Date ranges staff have marked as one indivisible stay (e.g. "Dec 29–31 must be booked together"). A GiST exclusion constraint makes overlapping ranges impossible to insert, same as `neom_price`. Purely an informational marker on the calendar — see `DATABASE.md`. |
 
 Helper functions (all called from the app via `supabase.rpc(...)`):
 
