@@ -142,22 +142,34 @@ function updateMonthLabel() {
   els.monthLabel.textContent = monthLabel(d.getFullYear(), d.getMonth());
 }
 
+let loadToken = 0;
+
 async function load() {
   if (state.to < state.from) {
     toast.error('The "To" date must be on or after the "From" date.');
     return;
   }
 
+  // Guards against a fast prev/next/preset click resolving after a later one
+  // (out-of-order network responses) and overwriting the current range's
+  // data with a stale range's — only the most recent call's result gets
+  // applied.
+  const myToken = ++loadToken;
   state.loading = true;
   render();
   try {
-    state.data = await summaryService.getBookingSummary(state.from, state.to);
+    const data = await summaryService.getBookingSummary(state.from, state.to);
+    if (myToken !== loadToken) return;
+    state.data = data;
   } catch (err) {
+    if (myToken !== loadToken) return;
     toast.error(err.message);
     state.data = null;
   } finally {
-    state.loading = false;
-    render();
+    if (myToken === loadToken) {
+      state.loading = false;
+      render();
+    }
   }
 }
 
@@ -272,11 +284,22 @@ function render() {
   // own framing of it as "doesn't matter that much".
   els.guardCutNote.textContent = `Villa guard's cut (1%): ${formatIDR(totalGuardCut)}`;
 
-  if (missingPriceNights > 0) {
+  if (totalNights === 0) {
+    // Distinct from the pricing-mismatch warning below — this is a plain
+    // "nothing to show" state, not a data-quality issue, so it gets its own
+    // clearly different (red, not amber) treatment rather than being lumped
+    // in with missingPriceNights (which can only be non-zero when there ARE
+    // booked nights).
     els.missingWarning.hidden = false;
+    els.missingWarning.classList.add('pricing-warning--empty');
+    els.missingWarning.innerHTML = '🔴 The selected dates have no booking in them.';
+  } else if (missingPriceNights > 0) {
+    els.missingWarning.hidden = false;
+    els.missingWarning.classList.remove('pricing-warning--empty');
     els.missingWarning.innerHTML = `⚠ ${missingPriceNights} booked night${missingPriceNights === 1 ? '' : 's'} in this range ${missingPriceNights === 1 ? 'has' : 'have'} no matching pricing rule and ${missingPriceNights === 1 ? 'is' : 'are'} excluded from revenue totals.`;
   } else {
     els.missingWarning.hidden = true;
+    els.missingWarning.classList.remove('pricing-warning--empty');
   }
 
   els.byBookerHost.innerHTML = renderBookerTable(byBooker);

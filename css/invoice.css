@@ -82,6 +82,13 @@
   margin-top: 8px;
 }
 
+/* Plain "nothing booked" state — distinct red styling so it never reads as
+   the same kind of issue as the amber pricing-mismatch warning above. */
+.pricing-warning--empty {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 /* Revision panel */
 .revision-panel .card-body {
   padding: 0;
