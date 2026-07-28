@@ -69,7 +69,14 @@ export function mount(container) {
     onChange: (value) => {
       state.from = value;
       updateMonthLabel();
-      load();
+      // Debounced, not load() directly: picking a new From leaves To exactly
+      // as it was (e.g. still Dec 31 from an old "This Year" view) for the
+      // instant in between this pick and the one the admin is about to make
+      // in the To field auto-opened right below — loading immediately here
+      // would briefly (or, if missed, not-so-briefly) query that stale,
+      // unintended From–To pairing and surface bookings from way outside the
+      // range the admin actually meant to look at.
+      scheduleLoad();
       // Faster UX for picking a custom range: go straight into the To
       // field's picker instead of making staff click it themselves.
       toPicker.open();
@@ -84,7 +91,9 @@ export function mount(container) {
     getReferenceValue: () => fromPicker.getValue(),
     onChange: (value) => {
       state.to = value;
-      load();
+      // Same reasoning as From's onChange above, symmetric for whichever
+      // field the admin happens to touch first.
+      scheduleLoad();
     }
   });
   els.toSlot.appendChild(toPicker.trigger);
@@ -140,6 +149,26 @@ function navigateMonth(delta) {
 function updateMonthLabel() {
   const d = parseISO(state.from);
   els.monthLabel.textContent = monthLabel(d.getFullYear(), d.getMonth());
+}
+
+let loadDebounce = null;
+
+/**
+ * Debounced entry point for the custom From/To fields specifically (see
+ * their onChange handlers above) — each field can only change one half of
+ * the range at a time, so calling load() straight away would query whatever
+ * the *other* field still holds from before, which is often a stale,
+ * unintended pairing (e.g. From just moved to Aug 1 while To is still Dec 31
+ * from an earlier "This Year" view). Coalescing the pair of edits into one
+ * load(), fired only once they've settled, means the query that actually
+ * runs always reflects the finished range rather than a fleeting
+ * in-between one. Every other caller of load() (month nav, presets,
+ * Refresh) already changes From and To together in one atomic step, so they
+ * call load() directly — there's no in-between state for them to coalesce.
+ */
+function scheduleLoad() {
+  clearTimeout(loadDebounce);
+  loadDebounce = setTimeout(load, 260);
 }
 
 let loadToken = 0;
