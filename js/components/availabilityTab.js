@@ -586,11 +586,16 @@ function openPopover(cellEl) {
   const info = state.statuses.get(dateISO) || { status: 'available', notes: '' };
   const linked = findLinkedStayForDate(dateISO);
   const rect = cellEl.getBoundingClientRect();
+  // "Available" means "open for a future booking" — meaningless for a date
+  // that's already happened, so it's left out of a passed date's options
+  // entirely rather than shown as a choice that doesn't make sense to pick.
+  const isPassedDate = dateISO < todayISO();
+  const statusOptions = EDITABLE_STATUSES.filter((key) => !(isPassedDate && key === 'available'));
 
   const popover = document.createElement('div');
   popover.className = 'status-popover';
   popover.innerHTML = `
-    ${EDITABLE_STATUSES.map((key) => {
+    ${statusOptions.map((key) => {
       // Only the Booked option ever carries a "Booked on …" note — it's
       // this date's own current status that's relevant, not whichever
       // option the admin might switch it to.
