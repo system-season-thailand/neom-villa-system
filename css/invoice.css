@@ -82,6 +82,17 @@
   margin-top: 8px;
 }
 
+/* Without this, the `hidden` attribute (used by the Summary tab to toggle
+   this exact element — see summaryTab.js) has no visual effect at all: an
+   author stylesheet's `display` always beats the browser's own default
+   `[hidden] { display: none }` rule, regardless of selector specificity,
+   since UA styles are the lowest-priority origin in the cascade. So setting
+   `.hidden = true` was leaving the box fully visible, still showing
+   whatever warning text was last rendered into it. */
+.pricing-warning[hidden] {
+  display: none;
+}
+
 /* Plain "nothing booked" state — distinct red styling so it never reads as
    the same kind of issue as the amber pricing-mismatch warning above. */
 .pricing-warning--empty {
