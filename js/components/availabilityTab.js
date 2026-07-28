@@ -462,12 +462,14 @@ function render() {
       // range selected while browsing a different month.
       const selected = day.inCurrentMonth && state.selectedDates.has(day.iso);
       const statusMeta = STATUSES[info.status] || STATUSES.available;
-      // A passed date that still carries a real stored status (most
-      // usefully "booked") keeps that status's color/data-status — this
-      // label is the only thing that changes, so "it was booked, and it's
-      // now in the past" both stay visible instead of the real status being
-      // lost to a generic gray "Passed".
-      const statusLabel = isPassedDate && info.status !== 'passed' ? `Passed & ${statusMeta.label}` : statusMeta.label;
+      // Only "Booked" gets called out specially once a date is passed — "it
+      // was booked, and it's now in the past" is the one combination worth
+      // flagging in the label (revenue/booker history an admin might need to
+      // fix). A passed Available/On Hold/Blocked date still keeps its real
+      // status's color/data-status (dimmed via .is-passed), but the label
+      // just reads "Passed" — there's nothing about "it was on hold" that's
+      // worth a compound label the way "it was booked" is.
+      const statusLabel = isPassedDate ? (info.status === 'booked' ? `Passed & ${statusMeta.label}` : 'Passed') : statusMeta.label;
       const linked = day.inCurrentMonth ? findLinkedStayForDate(day.iso) : null;
       const linkedTitle = linked
         ? `Must be booked together: ${formatDisplayDate(linked.startDate)} – ${formatDisplayDate(linked.endDate)}${linked.note ? ' — ' + linked.note : ''}`
