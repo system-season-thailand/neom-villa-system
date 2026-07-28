@@ -138,3 +138,15 @@ export async function setStatusBulk(dateIsoList, status, notes = '', bookedBy = 
   if (error) throw friendlyDbError(error, 'Could not update availability for the selected dates.');
   return (data || []).map(fromRow);
 }
+
+/**
+ * Reverts a date back to the table's implicit sparse default by deleting its
+ * row outright — used to undo an explicit status (e.g. Booked) set on a
+ * passed date, since 'passed' can never be written directly (the check
+ * constraint only allows the four staff-settable statuses). A no-op if the
+ * date has no stored row to begin with.
+ */
+export async function clearStatus(dateISO) {
+  const { error } = await supabaseClient.from(TABLE).delete().eq('date', dateISO);
+  if (error) throw friendlyDbError(error, 'Could not revert this date.');
+}

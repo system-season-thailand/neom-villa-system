@@ -587,10 +587,15 @@ function openPopover(cellEl) {
   const linked = findLinkedStayForDate(dateISO);
   const rect = cellEl.getBoundingClientRect();
   // "Available" means "open for a future booking" — meaningless for a date
-  // that's already happened, so it's left out of a passed date's options
-  // entirely rather than shown as a choice that doesn't make sense to pick.
+  // that's already happened, so a passed date gets "Passed" in its place
+  // instead: the only way to undo an explicit status (e.g. Booked) set on a
+  // passed date and let it fall back to a plain "Passed" again, since
+  // 'passed' itself can never be stored directly (see the table's CHECK
+  // constraint) — picking it just deletes the row (see revertToPassed).
   const isPassedDate = dateISO < todayISO();
-  const statusOptions = EDITABLE_STATUSES.filter((key) => !(isPassedDate && key === 'available'));
+  const statusOptions = isPassedDate
+    ? ['passed', 'booked', 'on_hold', 'blocked']
+    : EDITABLE_STATUSES;
 
   const popover = document.createElement('div');
   popover.className = 'status-popover';
@@ -640,6 +645,10 @@ function openPopover(cellEl) {
   popover.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', async (event) => {
       event.stopPropagation();
+      if (btn.dataset.status === 'passed') {
+        await revertToPassed(dateISO);
+        return;
+      }
       if (btn.dataset.status === 'booked') {
         // Booked By replaces this whole popover with its own standalone one
         // (see openBookedByPopover) rather than expanding inline — fewer
@@ -750,6 +759,26 @@ async function saveStatus(dateISO, status, notes, bookedBy) {
       state.statuses.set(dateISO, updated);
       toast.success(`${dateISO} marked as ${STATUSES[status].label}.`);
     }
+    closePopover();
+    render();
+  } catch (err) {
+    toast.error(err.message);
+  }
+}
+
+/**
+ * Undoes whatever explicit status a passed date carries (most usefully
+ * Booked) by deleting its row entirely, letting it fall back to the
+ * sparse-table default — which, for a date before today, is always "Passed"
+ * again. Only ever offered in the popover for a date that's already passed
+ * (see openPopover), so there's no risk of this accidentally clearing a
+ * future date's status.
+ */
+async function revertToPassed(dateISO) {
+  try {
+    await availabilityService.clearStatus(dateISO);
+    state.statuses.delete(dateISO);
+    toast.success(`${dateISO} reverted to Passed.`);
     closePopover();
     render();
   } catch (err) {
