@@ -450,8 +450,17 @@ function render() {
       const isPassedDate = day.iso < today;
       const fallbackStatus = isPassedDate ? 'passed' : 'available';
       const info = state.statuses.get(day.iso) || { status: fallbackStatus, notes: '' };
-      const editable = day.inCurrentMonth && info.status !== 'passed' && !state.readOnly;
-      const selected = state.selectedDates.has(day.iso);
+      // Admins can edit any date, passed or not — a passed date is only ever
+      // visually distinct (dimmed, "Passed & X" label below), never locked
+      // out, so a forgotten/incorrect date can always be corrected.
+      const editable = day.inCurrentMonth && !state.readOnly;
+      // Never true for the empty padding cells that fill out the grid with
+      // adjacent months' dates — those aren't real cells of the month on
+      // screen and have no click handler wired up at all (see the
+      // .is-editable-only querySelectorAll below), so they must never show
+      // the selected checkmark even when their date happens to fall inside a
+      // range selected while browsing a different month.
+      const selected = day.inCurrentMonth && state.selectedDates.has(day.iso);
       const statusMeta = STATUSES[info.status] || STATUSES.available;
       // A passed date that still carries a real stored status (most
       // usefully "booked") keeps that status's color/data-status — this
@@ -496,10 +505,11 @@ const LONG_PRESS_MS = 500;
 
 /**
  * Wires up a calendar cell's whole interaction set: a plain click (open the
- * status popover, or, if already in select mode, extend the selection —
- * see selectRangeTo — to the full range between this cell and the anchor
- * that started select mode), a long-press (touch devices — enters select
- * mode with this date as the anchor), and a double-click (mouse — same, for
+ * status popover; or, if already in select mode, extend the selection — see
+ * selectRangeTo — to the full range between this cell and the anchor that
+ * started select mode, unless this cell *is* that anchor, in which case the
+ * click instead turns select mode back off), a long-press (touch devices —
+ * enters select mode with this date as the anchor), and a double-click (mouse — same, for
  * desktop). There's no dedicated "Select Multiple" button any more; this is
  * the only way in. The long-press/double-click path briefly opens (and, for
  * double-click, immediately closes again via the popover's own same-cell
@@ -543,7 +553,15 @@ function attachCellInteractions(cell) {
       return;
     }
     if (state.selectMode) {
-      selectRangeTo(dateISO);
+      if (dateISO === state.selectAnchor) {
+        // Clicking the very cell that started select mode again is the
+        // "undo" gesture — turns select mode back off rather than
+        // re-selecting that same single date.
+        clearSelection();
+        render();
+      } else {
+        selectRangeTo(dateISO);
+      }
     } else {
       openPopover(cell);
     }
