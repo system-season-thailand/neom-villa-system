@@ -7,7 +7,7 @@ import * as settingsService from '../services/settingsService.js';
 import { toast } from './toast.js';
 import { openModal, confirmDialog } from './modal.js';
 import { createOptionSelect } from './optionSelect.js';
-import { buildMonthMatrix, monthLabel, todayISO, addDays, formatDisplayDate } from '../utils/dateUtils.js';
+import { buildMonthMatrix, monthLabel, todayISO, addDays, formatDisplayDate, formatDateTime } from '../utils/dateUtils.js';
 import { formatIDRShort } from '../utils/format.js';
 
 const EDITABLE_STATUSES = ['available', 'booked', 'on_hold', 'blocked'];
@@ -28,6 +28,7 @@ export function mount(container, options = {}) {
     loading: true,
     selectMode: false,
     selectedDates: new Set(),
+    selectAnchor: null,
     readOnly: Boolean(options.readOnly)
   };
 
@@ -94,7 +95,8 @@ function fromRealtimeRow(row) {
     status: row.status,
     statusColor: row.status_color,
     notes: row.notes || '',
-    bookedBy: row.booked_by || ''
+    bookedBy: row.booked_by || '',
+    bookedAt: row.booked_at || null
   };
 }
 
@@ -201,30 +203,32 @@ function renderBookerLine(info) {
 // Bulk "select multiple" mode — entered via a long-press (touch) or
 // double-click (mouse) on any editable cell rather than a dedicated toggle
 // button; exited via the ✕ button in the actions bar or by deselecting back
-// down to zero dates.
+// down to zero dates. The cell that entered select mode becomes the anchor:
+// every plain click on another cell afterwards re-selects the whole inclusive
+// range between the anchor and whichever cell was just clicked (replacing
+// the previous selection, not adding to it) — two clicks pick a whole range
+// instead of clicking every night in it one at a time.
 // ---------------------------------------------------------------------------
 function enterSelectModeWithDate(dateISO) {
   state.selectMode = true;
-  state.selectedDates.add(dateISO);
+  state.selectAnchor = dateISO;
+  state.selectedDates = new Set([dateISO]);
   closePopover();
   render();
 }
 
-function toggleDateSelection(dateISO) {
-  if (state.selectedDates.has(dateISO)) {
-    state.selectedDates.delete(dateISO);
-  } else {
-    state.selectedDates.add(dateISO);
-  }
-  if (state.selectedDates.size === 0) {
-    state.selectMode = false;
-  }
+function selectRangeTo(dateISO) {
+  if (!state.selectAnchor) state.selectAnchor = dateISO;
+  const start = state.selectAnchor < dateISO ? state.selectAnchor : dateISO;
+  const end = state.selectAnchor < dateISO ? dateISO : state.selectAnchor;
+  state.selectedDates = new Set(datesInRange(start, end));
   render();
 }
 
 function clearSelection() {
   state.selectedDates.clear();
   state.selectMode = false;
+  state.selectAnchor = null;
 }
 
 /** Every ISO date from startISO to endISO, inclusive. */
@@ -443,11 +447,18 @@ function render() {
   const cellsHtml = weeks
     .flat()
     .map((day) => {
-      const fallbackStatus = day.iso < today ? 'passed' : 'available';
+      const isPassedDate = day.iso < today;
+      const fallbackStatus = isPassedDate ? 'passed' : 'available';
       const info = state.statuses.get(day.iso) || { status: fallbackStatus, notes: '' };
       const editable = day.inCurrentMonth && info.status !== 'passed' && !state.readOnly;
       const selected = state.selectedDates.has(day.iso);
       const statusMeta = STATUSES[info.status] || STATUSES.available;
+      // A passed date that still carries a real stored status (most
+      // usefully "booked") keeps that status's color/data-status — this
+      // label is the only thing that changes, so "it was booked, and it's
+      // now in the past" both stay visible instead of the real status being
+      // lost to a generic gray "Passed".
+      const statusLabel = isPassedDate && info.status !== 'passed' ? `Passed & ${statusMeta.label}` : statusMeta.label;
       const linked = day.inCurrentMonth ? findLinkedStayForDate(day.iso) : null;
       const linkedTitle = linked
         ? `Must be booked together: ${formatDisplayDate(linked.startDate)} – ${formatDisplayDate(linked.endDate)}${linked.note ? ' — ' + linked.note : ''}`
@@ -455,7 +466,7 @@ function render() {
       return `
         <button
           type="button"
-          class="calendar-cell${day.inCurrentMonth ? '' : ' is-empty'}${day.iso === today ? ' is-today' : ''}${editable ? ' is-editable' : ''}${selected ? ' is-selected' : ''}${linked ? ' is-linked' : ''}"
+          class="calendar-cell${day.inCurrentMonth ? '' : ' is-empty'}${day.iso === today ? ' is-today' : ''}${isPassedDate ? ' is-passed' : ''}${editable ? ' is-editable' : ''}${selected ? ' is-selected' : ''}${linked ? ' is-linked' : ''}"
           data-date="${day.iso}"
           ${day.inCurrentMonth ? `data-status="${info.status}"` : ''}
           ${linkedTitle ? `title="${escapeAttr(linkedTitle)}"` : ''}
@@ -466,7 +477,7 @@ function render() {
             day.inCurrentMonth
               ? `<div class="cell-bottom">
                    ${state.readOnly ? renderPriceLine(day.iso) : renderBookerLine(info)}
-                   <span class="cell-status-pill">${statusMeta.label}</span>
+                   <span class="cell-status-pill">${statusLabel}</span>
                    ${info.notes ? `<span class="cell-note" title="${escapeAttr(info.notes)}">${escapeHtml(info.notes)}</span>` : ''}
                  </div>`
               : ''
@@ -485,14 +496,16 @@ const LONG_PRESS_MS = 500;
 
 /**
  * Wires up a calendar cell's whole interaction set: a plain click (open the
- * status popover, or toggle this date's selection if already in select
- * mode), a long-press (touch devices — enters select mode with this date
- * selected), and a double-click (mouse — same, for desktop). There's no
- * dedicated "Select Multiple" button any more; this is the only way in.
- * The long-press/double-click path briefly opens (and, for double-click,
- * immediately closes again via the popover's own same-cell toggle) the
- * status popover before entering select mode — a harmless side effect of
- * layering this on top of the plain click handler rather than a real bug.
+ * status popover, or, if already in select mode, extend the selection —
+ * see selectRangeTo — to the full range between this cell and the anchor
+ * that started select mode), a long-press (touch devices — enters select
+ * mode with this date as the anchor), and a double-click (mouse — same, for
+ * desktop). There's no dedicated "Select Multiple" button any more; this is
+ * the only way in. The long-press/double-click path briefly opens (and, for
+ * double-click, immediately closes again via the popover's own same-cell
+ * toggle) the status popover before entering select mode — a harmless side
+ * effect of layering this on top of the plain click handler rather than a
+ * real bug.
  */
 function attachCellInteractions(cell) {
   const dateISO = cell.dataset.date;
@@ -530,7 +543,7 @@ function attachCellInteractions(cell) {
       return;
     }
     if (state.selectMode) {
-      toggleDateSelection(dateISO);
+      selectRangeTo(dateISO);
     } else {
       openPopover(cell);
     }
@@ -557,14 +570,23 @@ function openPopover(cellEl) {
   const popover = document.createElement('div');
   popover.className = 'status-popover';
   popover.innerHTML = `
-    <div class="status-popover-title">${dateISO}</div>
-    ${EDITABLE_STATUSES.map(
-      (key) => `
+    ${EDITABLE_STATUSES.map((key) => {
+      // Only the Booked option ever carries a "Booked on …" note — it's
+      // this date's own current status that's relevant, not whichever
+      // option the admin might switch it to.
+      const bookedNote =
+        key === 'booked' && info.status === 'booked' && info.bookedAt
+          ? `<span class="status-option-sub">Booked on ${escapeHtml(formatDateTime(info.bookedAt))}</span>`
+          : '';
+      return `
       <button type="button" class="status-option" data-status="${key}">
         <span class="legend-swatch" style="background:${STATUSES[key].color}"></span>
-        ${STATUSES[key].label}
-      </button>`
-    ).join('')}
+        <span class="status-option-label">
+          <span>${STATUSES[key].label}</span>
+          ${bookedNote}
+        </span>
+      </button>`;
+    }).join('')}
     <div class="status-popover-notes">
       <input class="input status-popover-notes-input" type="text" id="popover-notes" placeholder="Optional note" value="${escapeAttr(info.notes)}" />
     </div>

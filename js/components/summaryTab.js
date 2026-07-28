@@ -1,7 +1,7 @@
 import * as summaryService from '../services/summaryService.js';
 import { toast } from './toast.js';
 import { createDatePicker } from './datePicker.js';
-import { toISO, parseISO, monthLabel } from '../utils/dateUtils.js';
+import { toISO, parseISO, monthLabel, formatDisplayDate } from '../utils/dateUtils.js';
 import { formatIDR } from '../utils/format.js';
 
 const PRESETS = [
@@ -274,7 +274,7 @@ function render() {
     return;
   }
 
-  const { byBooker, byMonth, totalNights, totalRevenue, totalCommission, totalGuardCut, missingPriceNights } = state.data;
+  const { byBooker, byMonth, totalNights, totalRevenue, totalCommission, totalGuardCut, missingPriceNights, missingPriceDates } = state.data;
 
   els.totalNights.textContent = String(totalNights);
   els.totalRevenue.textContent = formatIDR(totalRevenue);
@@ -296,7 +296,7 @@ function render() {
   } else if (missingPriceNights > 0) {
     els.missingWarning.hidden = false;
     els.missingWarning.classList.remove('pricing-warning--empty');
-    els.missingWarning.innerHTML = `⚠ ${missingPriceNights} booked night${missingPriceNights === 1 ? '' : 's'} in this range ${missingPriceNights === 1 ? 'has' : 'have'} no matching pricing rule and ${missingPriceNights === 1 ? 'is' : 'are'} excluded from revenue totals.`;
+    els.missingWarning.innerHTML = `⚠ ${missingPriceNights} booked night${missingPriceNights === 1 ? '' : 's'} in this range ${missingPriceNights === 1 ? 'has' : 'have'} no matching pricing rule and ${missingPriceNights === 1 ? 'is' : 'are'} excluded from revenue totals.${renderMissingDatesList(missingPriceDates)}`;
   } else {
     els.missingWarning.hidden = true;
     els.missingWarning.classList.remove('pricing-warning--empty');
@@ -304,6 +304,18 @@ function render() {
 
   els.byBookerHost.innerHTML = renderBookerTable(byBooker);
   els.byMonthHost.innerHTML = renderMonthTable(byMonth);
+}
+
+/** Names the exact date(s) missing a pricing rule, not just a count — so
+ * whoever's filling in the Prices tab can go straight to the actual gap
+ * instead of re-checking the whole range by hand. Capped at 8 dates inline;
+ * beyond that a running list would be more clutter than help. */
+function renderMissingDatesList(dates) {
+  if (!dates?.length) return '';
+  const shown = dates.slice(0, 8).map((d) => escapeHtml(formatDisplayDate(d)));
+  const extra = dates.length - shown.length;
+  const list = shown.join(', ') + (extra > 0 ? `, +${extra} more` : '');
+  return ` (${list})`;
 }
 
 function escapeHtml(value) {

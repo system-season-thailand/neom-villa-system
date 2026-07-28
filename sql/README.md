@@ -1,6 +1,6 @@
 # Database setup
 
-Seven SQL scripts create everything the app needs: tables, constraints,
+Eight SQL scripts create everything the app needs: tables, constraints,
 indexes, triggers, helper functions, RLS policies, and Realtime. After
 running them the app works immediately — no further database changes are
 needed.
@@ -22,7 +22,8 @@ file.
    5. [`005_create_neom_linked_stays.sql`](005_create_neom_linked_stays.sql) — "must be booked together" date groups for the Availability calendar.
    6. [`006_add_booked_by.sql`](006_add_booked_by.sql) — adds a "Booked By" column to `neom_availability` and seeds its dropdown's initial values, powering the "ملخص" (Summary) tab.
    7. [`007_enable_availability_realtime.sql`](007_enable_availability_realtime.sql) — turns on Supabase Realtime for `neom_availability`, so a status change on one device shows up live on every other device with the Availability calendar open.
-3. Confirm each script reports success before running the next one — 002, 003, 004, 005, 006, and 007 all call a function or depend on a table defined earlier.
+   8. [`008_add_booked_at.sql`](008_add_booked_at.sql) — adds a `booked_at` column to `neom_availability`, auto-set by a trigger to the moment a date's status becomes `'booked'`, powering the "Booked on …" note shown in the Availability calendar's status popover.
+3. Confirm each script reports success before running the next one — 002, 003, 004, 005, 006, 007, and 008 all call a function or depend on a table defined earlier.
 
 Every statement in every script is idempotent (`CREATE ... IF NOT EXISTS`,
 `DROP POLICY/TRIGGER IF EXISTS` before recreating), so re-running a script —
@@ -47,6 +48,11 @@ revenue breakdown.
 `supabase_realtime` publication. Without it the Availability tab still works
 exactly the same on a single device — it just won't pick up changes made on
 *another* device until the calendar is next reloaded or navigated.
+
+`008_add_booked_at.sql` adds a `booked_at` timestamptz column to
+`neom_availability`, set by a trigger the moment a date's status transitions
+*to* `'booked'` (and cleared back to `NULL` the moment it moves away from
+`'booked'`) — see `DATABASE.md`.
 
 Helper functions (all called from the app via `supabase.rpc(...)`):
 

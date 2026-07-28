@@ -1,6 +1,6 @@
 import { supabaseClient } from '../config/supabase.js';
 import { friendlyDbError } from '../utils/dbErrors.js';
-import { todayISO } from '../utils/dateUtils.js';
+import { todayISO, addDays } from '../utils/dateUtils.js';
 
 const TABLE = 'neom_availability';
 
@@ -18,16 +18,23 @@ function fromRow(row) {
     status: row.status,
     statusColor: row.status_color,
     notes: row.notes || '',
-    bookedBy: row.booked_by || ''
+    bookedBy: row.booked_by || '',
+    bookedAt: row.booked_at || null
   };
 }
 
 /**
- * Returns a Map<dateISO, {date,status,statusColor,notes,bookedBy}> covering
- * every day in [startISO, endISO] inclusive. Dates without a stored row are
- * filled in with the implicit default: "passed" if the date is before today,
- * otherwise "available". This keeps the table sparse — staff only ever
- * write a row when a date actually changes state.
+ * Returns a Map<dateISO, {date,status,statusColor,notes,bookedBy,bookedAt}>
+ * covering every day in [startISO, endISO] inclusive. Dates without a stored
+ * row are filled in with the implicit default: "passed" if the date is
+ * before today, otherwise "available". This keeps the table sparse — staff
+ * only ever write a row when a date actually changes state.
+ *
+ * A stored row's real status (booked/on_hold/blocked/available) is always
+ * preserved as-is, even for a date in the past — the UI layer (see
+ * availabilityTab.js) is the one that decides how to *label* a past date
+ * that still carries a real status (e.g. "Passed & Booked"), so an admin can
+ * still see and correct what actually happened on that date.
  */
 export async function getStatusesInRange(startISO, endISO) {
   const { data, error } = await supabaseClient
@@ -45,13 +52,11 @@ export async function getStatusesInRange(startISO, endISO) {
 
   const today = todayISO();
   const result = new Map();
-  let cursor = new Date(`${startISO}T00:00:00`);
-  const end = new Date(`${endISO}T00:00:00`);
-  while (cursor <= end) {
-    const iso = cursor.toISOString().slice(0, 10);
+  let iso = startISO;
+  while (iso <= endISO) {
     const stored = byDate.get(iso);
     if (stored) {
-      result.set(iso, iso < today ? { ...stored, status: 'passed', statusColor: STATUSES.passed.color } : stored);
+      result.set(iso, stored);
     } else {
       const isPassed = iso < today;
       result.set(iso, {
@@ -59,20 +64,18 @@ export async function getStatusesInRange(startISO, endISO) {
         status: isPassed ? 'passed' : 'available',
         statusColor: isPassed ? STATUSES.passed.color : STATUSES.available.color,
         notes: '',
-        bookedBy: ''
+        bookedBy: '',
+        bookedAt: null
       });
     }
-    cursor.setDate(cursor.getDate() + 1);
+    iso = addDays(iso, 1);
   }
   return result;
 }
 
 const EDITABLE_STATUSES = ['available', 'booked', 'on_hold', 'blocked'];
 
-function assertEditable(dateISO, status) {
-  if (dateISO < todayISO()) {
-    throw new Error('Past dates are automatically marked as Passed and cannot be edited.');
-  }
+function assertEditable(status) {
   if (!EDITABLE_STATUSES.includes(status)) {
     throw new Error(`Invalid status: ${status}`);
   }
@@ -88,14 +91,15 @@ function assertBookedByPresent(status, bookedBy) {
 }
 
 /**
- * Sets the status for a single future/today date. Past dates cannot be
- * edited — the UI never offers this action, and we guard it here too.
- * `bookedBy` is only ever actually stored when `status` is 'booked' — for
- * every other status it's cleared, so a booker's name never lingers on a
- * date that's no longer booked.
+ * Sets the status for a single date, past or future — admins can go back
+ * and correct a passed date they forgot to update (e.g. mark it Booked
+ * after the fact), same as any upcoming date. `bookedBy` is only ever
+ * actually stored when `status` is 'booked' — for every other status it's
+ * cleared, so a booker's name never lingers on a date that's no longer
+ * booked.
  */
 export async function setStatus(dateISO, status, notes = '', bookedBy = '') {
-  assertEditable(dateISO, status);
+  assertEditable(status);
   assertBookedByPresent(status, bookedBy);
 
   const { data, error } = await supabaseClient
@@ -120,7 +124,7 @@ export async function setStatus(dateISO, status, notes = '', bookedBy = '') {
  */
 export async function setStatusBulk(dateIsoList, status, notes = '', bookedBy = '') {
   if (!dateIsoList.length) return [];
-  dateIsoList.forEach((dateISO) => assertEditable(dateISO, status));
+  assertEditable(status);
   assertBookedByPresent(status, bookedBy);
 
   const rows = dateIsoList.map((date) => ({

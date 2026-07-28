@@ -1,5 +1,6 @@
 import { supabaseClient } from '../config/supabase.js';
 import { friendlyDbError } from '../utils/dbErrors.js';
+import { addDays } from '../utils/dateUtils.js';
 
 const TABLE = 'neom_price';
 
@@ -47,7 +48,7 @@ export async function listPrices({ search = '', sortBy = 'start_date', sortDir =
  * endDateExclusive is the checkout date (not itself a booked night).
  */
 export async function findRatesForRange(startDate, endDateExclusive) {
-  const lastNight = shiftDate(endDateExclusive, -1);
+  const lastNight = addDays(endDateExclusive, -1);
   const { data, error } = await supabaseClient
     .from(TABLE)
     .select('*')
@@ -57,12 +58,6 @@ export async function findRatesForRange(startDate, endDateExclusive) {
 
   if (error) throw friendlyDbError(error, 'Could not load pricing rules for this stay.');
   return (data || []).map(fromRow);
-}
-
-function shiftDate(iso, days) {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 export async function createPrice(price) {

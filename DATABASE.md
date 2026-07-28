@@ -76,6 +76,7 @@ villa-type-specific pricing is needed later, see `FUTURE_IMPROVEMENTS.md`.
 | `status_color` | text | Hex color, set automatically by a trigger from `status` — never chosen by the client |
 | `notes` | text | Optional |
 | `booked_by` | text | Who made the booking — only meaningful (and only ever stored) when `status = 'booked'`; cleared to `NULL` for every other status. Feeds the "ملخص" (Summary) tab's per-booker breakdown — see below. |
+| `booked_at` | timestamptz | When this date's status *became* `'booked'` — set automatically by a trigger (`sql/008_add_booked_at.sql`), never chosen by the client. Preserved across later saves that keep the status as `'booked'` (e.g. editing notes), cleared to `NULL` the moment status moves away from `'booked'`. Shown as "Booked on …" next to the Booked option in the Availability calendar's status popover. |
 
 **This table is sparse by design.** It is not pre-populated with every
 calendar date. A date with no row is treated by the app as:
@@ -84,12 +85,21 @@ calendar date. A date with no row is treated by the app as:
 - **Available**, if the date is today or in the future
 
 This is why `status` cannot be set to `'passed'` — the check constraint only
-allows the four staff-settable values. "Passed" is a pure function of
-`date < CURRENT_DATE`, computed by the app (see `getStatusesInRange()` in
-`js/services/availabilityService.js`) every time the calendar is rendered,
-which is also why it requires no cron job, scheduled function, or nightly
-batch update: it's correct by construction, at any moment, with zero
-maintenance.
+allows the four staff-settable values. "Passed" (for a date with no stored
+row) is a pure function of `date < CURRENT_DATE`, computed by the app (see
+`getStatusesInRange()` in `js/services/availabilityService.js`) every time
+the calendar is rendered, which is also why it requires no cron job,
+scheduled function, or nightly batch update: it's correct by construction, at
+any moment, with zero maintenance.
+
+A date that *does* have a stored row keeps its real status even once it's in
+the past — `getStatusesInRange()` never overwrites it to `'passed'`. The
+Availability tab (admin view) labels such a date "Passed & Booked" (or
+"Passed & On Hold" / "Passed & Blocked"), dimmed but still showing its actual
+status color, and — unlike a plain never-touched passed date — it stays
+editable, so an admin who forgot to update a date can still go back and fix
+it after the fact. The read-only (User role) calendar still hides every
+passed date outright regardless of its status, unchanged from before.
 
 **Live sync across devices:** `sql/007_enable_availability_realtime.sql`
 adds this table to Supabase's `supabase_realtime` publication. The
@@ -239,8 +249,10 @@ name is actually chosen. Both are then summed client-side two ways: by booker
 revenue) — the "per person" and "for the villa overall" views the tab shows
 side by side. A booked night with no matching pricing rule still counts
 toward nights in both breakdowns, but contributes `0` to revenue rather than
-guessing a rate; `missingPriceNights` in the result lets the UI surface that
-rather than silently understating totals.
+guessing a rate; `missingPriceNights` (count) and `missingPriceDates` (the
+actual dates) in the result let the UI name exactly which night(s) to add a
+pricing rule for, rather than silently understating totals or leaving staff
+to guess which date is the gap.
 
 Each booker's row also carries `commission` and `guardCut` —
 `BOOKER_COMMISSION_RATE` (9%) and `GUARD_COMMISSION_RATE` (1%) of *that

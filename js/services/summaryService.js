@@ -22,7 +22,9 @@ export const GUARD_COMMISSION_RATE = 0.01;
  * Each booker's `commission`/`guardCut` are
  * just BOOKER_COMMISSION_RATE/GUARD_COMMISSION_RATE of *their own* revenue —
  * the guard's cut is a per-booking share, not one lump sum, so it still adds
- * up correctly to `totalGuardCut` across bookers.
+ * up correctly to `totalGuardCut` across bookers. `missingPriceDates` carries
+ * the actual dates behind `missingPriceNights` so the UI can name them
+ * directly instead of just flagging a count — see summaryTab.js.
  */
 export async function getBookingSummary(startISO, endISO) {
   const [{ data: bookedRows, error: bookedErr }, { data: priceRows, error: priceErr }] = await Promise.all([
@@ -61,12 +63,16 @@ export async function getBookingSummary(startISO, endISO) {
   let totalNights = 0;
   let totalRevenue = 0;
   let missingPriceNights = 0;
+  const missingPriceDates = [];
 
   for (const row of bookedRows || []) {
     const bookedBy = (row.booked_by || '').trim();
     const rate = rateForDate(row.date);
     const revenue = rate ?? 0;
-    if (rate == null) missingPriceNights += 1;
+    if (rate == null) {
+      missingPriceNights += 1;
+      missingPriceDates.push(row.date);
+    }
 
     const bookerEntry = byBookerMap.get(bookedBy) || { bookedBy, nights: 0, revenue: 0 };
     bookerEntry.nights += 1;
@@ -98,6 +104,7 @@ export async function getBookingSummary(startISO, endISO) {
     totalRevenue,
     totalCommission: totalRevenue * BOOKER_COMMISSION_RATE,
     totalGuardCut: totalRevenue * GUARD_COMMISSION_RATE,
-    missingPriceNights
+    missingPriceNights,
+    missingPriceDates
   };
 }
