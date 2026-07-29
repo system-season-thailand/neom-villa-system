@@ -131,6 +131,12 @@ the next cron tick, so whoever's watching sees the revert happen right away.
 An admin can still change an On Hold date to any other status at any time
 before that, exactly like any other date.
 
+To wipe every booking and linked-stay group and start fresh (e.g. right
+before going to production), run `sql/reset_bookings.sql` — a standalone,
+destructive script kept out of the normal numbered setup sequence, same
+reasoning as `sql/reset_invoice_numbering.sql` above. See `sql/README.md`
+for details.
+
 **Live sync across devices:** `sql/007_enable_availability_realtime.sql`
 adds this table to Supabase's `supabase_realtime` publication. The
 Availability tab (`js/components/availabilityTab.js`) subscribes to

@@ -3,10 +3,11 @@
 Eleven numbered SQL scripts create everything the app needs: tables,
 constraints, indexes, triggers, helper functions, RLS policies, Realtime,
 and a scheduled job. After running them the app works immediately — no
-further database changes are needed. A twelfth file,
-[`reset_invoice_numbering.sql`](reset_invoice_numbering.sql), is a separate,
-optional, **destructive** script — see its own section below — not part of
-this numbered setup sequence.
+further database changes are needed. Two more files,
+[`reset_invoice_numbering.sql`](reset_invoice_numbering.sql) and
+[`reset_bookings.sql`](reset_bookings.sql), are separate, optional,
+**destructive** scripts — see their own sections below — not part of this
+numbered setup sequence.
 
 There is no Storage bucket. Every invoice revision stores a full JSON
 snapshot of its data in `neom_pdf.invoice_data`; the PDF itself is
@@ -93,6 +94,17 @@ setup above — it's a standalone script you run only when you actually want
 to wipe every saved invoice and start renumbering from a specific point.
 There is no undo; export the table first if there's any chance you'll want
 that data again.
+
+## Resetting all bookings (optional, destructive)
+
+[`reset_bookings.sql`](reset_bookings.sql) permanently deletes every row in
+`neom_availability` and `neom_linked_stays` — every Booked/On Hold/Blocked
+date and every "must be booked together" group. Since `neom_availability` is
+sparse by design (see `009_stop_storing_available.sql`), an empty table
+already means every date shows as Available again — there's nothing else to
+reset. `neom_price` (pricing rules) and `neom_pdf` (invoices) are untouched.
+Also standalone, not part of the numbered setup above; there is no undo,
+export both tables first if there's any chance you'll want that data again.
 
 ## Security model
 
