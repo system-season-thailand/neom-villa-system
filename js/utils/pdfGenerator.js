@@ -169,6 +169,20 @@ export async function generateInvoicePdf(invoice) {
     await ensureArabicWebFontReady();
   }
 
+  // Computed once, up front, and reused everywhere this invoice's number/
+  // revision shows up (page header below, the footer's "Revision N" line,
+  // and the downloaded file's name) — a single source of truth so those
+  // three spots can never drift out of sync with each other.
+  //
+  // The database's revision_number is 1 for a brand-new invoice (so
+  // MAX(revision_number)+1 numbering has no off-by-one elsewhere), but staff
+  // read a first-time invoice as "Revision 0" and expect no "RevN" on it at
+  // all — only an actual revision (the 2nd+ download of the same invoice
+  // number) should say "Rev1" and up. Shifting the *displayed* number down
+  // by one here keeps that DB invariant untouched.
+  const displayRevision = invoice.revisionNumber - 1;
+  const displayInvoiceNumber = buildDisplayInvoiceNumber(invoice);
+
   const doc = newDoc();
   doc.setProperties({
     title: `Invoice ${invoice.invoiceNumber}`,
@@ -190,11 +204,16 @@ export async function generateInvoicePdf(invoice) {
     color: COLOR_ACCENT,
     align: 'right'
   });
-  drawText(doc, invoice.invoiceNumber, PAGE_MARGIN + CONTENT_WIDTH, y + 11, {
-    size: 11,
-    weight: 'bold',
-    align: 'right'
-  });
+  // No "RevN" here at all for a first-ever download (displayRevision 0) —
+  // only the footer's "Revision 0" line marks that case, matching how
+  // Rev0 is also left off the downloaded file's name.
+  drawText(
+    doc,
+    displayRevision > 0 ? `${displayInvoiceNumber} Rev${displayRevision}` : displayInvoiceNumber,
+    PAGE_MARGIN + CONTENT_WIDTH,
+    y + 11,
+    { size: 11, weight: 'bold', align: 'right' }
+  );
   drawText(doc, `Date: ${formatDisplayDate(invoice.generatedAt || todayIsoLocal())}`, PAGE_MARGIN + CONTENT_WIDTH, y + 16, {
     size: 8.5,
     color: COLOR_MUTED,
@@ -311,13 +330,6 @@ export async function generateInvoicePdf(invoice) {
   });
 
   // ---- Footer --------------------------------------------------------
-  // The database's revision_number is 1 for a brand-new invoice (so
-  // MAX(revision_number)+1 numbering has no off-by-one elsewhere), but staff
-  // read a first-time invoice as "Revision 0" and expect its file to have no
-  // "-revN" suffix at all — only an actual revision (the 2nd+ download of the
-  // same invoice number) should say "Revision 1" and add "-rev1". Shifting
-  // the *displayed* number down by one here keeps that DB invariant untouched.
-  const displayRevision = invoice.revisionNumber - 1;
   const footerY = 297 - PAGE_MARGIN;
   doc.setDrawColor(...COLOR_BORDER);
   doc.setLineWidth(0.3);
@@ -330,7 +342,7 @@ export async function generateInvoicePdf(invoice) {
   });
 
   const blob = doc.output('blob');
-  const fileName = buildFileName(invoice, displayRevision);
+  const fileName = buildFileName(invoice.guestName, displayInvoiceNumber, displayRevision);
   return { blob, fileName };
 }
 
@@ -350,22 +362,31 @@ function sanitizeForFileName(text) {
 }
 
 /**
- * "ALZOBIDI MOSLEH FAYEZ INV-N-VII-26-0124" (plus " Rev1", "Rev2", … for an
- * actual revision — never "Rev0", since displayRevision 0 means this is the
- * first-ever download of this invoice number). "INV-N-" is a fixed prefix;
- * the roman-numeral month and 2-digit year are *today's* — the moment this
- * PDF is actually being generated/downloaded — not any date stored on the
- * invoice itself, so re-downloading the same saved invoice next month
- * produces a different file name, which is by design (per the villa's own
- * naming convention this mirrors, not a bug). The 4-digit sequence is
- * invoiceNumber's own trailing segment, e.g. "0124" out of "INV-2026-0124".
+ * "INV-N-VII-26-0124" — shown on the PDF page itself (next to "INVOICE", top
+ * right) and reused as-is inside both the downloaded file's name and (with
+ * " RevN" appended — see generateInvoicePdf) nowhere else, so all three
+ * never drift apart. "INV-N-" is a fixed prefix; the roman-numeral month and
+ * 2-digit year are *today's* — the moment this PDF is actually being
+ * generated/downloaded — not any date stored on the invoice itself, so
+ * re-downloading the same saved invoice next month produces a different
+ * number here (by design, matching the villa's own convention, not a bug).
+ * The 4-digit sequence is invoiceNumber's own trailing segment, e.g. "0124"
+ * out of "INV-2026-0124".
  */
-function buildFileName(invoice, displayRevision) {
-  const guestNameUpper = sanitizeForFileName(invoice.guestName).toUpperCase();
+function buildDisplayInvoiceNumber(invoice) {
   const now = new Date();
   const monthRoman = ROMAN_MONTHS[now.getMonth()];
   const yy = String(now.getFullYear()).slice(-2);
   const seq = invoice.invoiceNumber.split('-').pop();
+  return `INV-N-${monthRoman}-${yy}-${seq}`;
+}
+
+/** "ALZOBIDI MOSLEH FAYEZ INV-N-VII-26-0124" (plus " Rev1", "Rev2", … for an
+ * actual revision — never "Rev0", since displayRevision 0 means this is the
+ * first-ever download of this invoice number) — see buildDisplayInvoiceNumber
+ * above for where displayInvoiceNumber itself comes from. */
+function buildFileName(guestName, displayInvoiceNumber, displayRevision) {
+  const guestNameUpper = sanitizeForFileName(guestName).toUpperCase();
   const revSuffix = displayRevision > 0 ? ` Rev${displayRevision}` : '';
-  return `${guestNameUpper} INV-N-${monthRoman}-${yy}-${seq}${revSuffix}.pdf`;
+  return `${guestNameUpper} ${displayInvoiceNumber}${revSuffix}.pdf`;
 }
