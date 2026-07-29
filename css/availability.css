@@ -39,6 +39,11 @@
   width: 10px;
   height: 10px;
   border-radius: 3px;
+  /* Available's swatch is plain white — without this ring it would be an
+     invisible dot against the legend/popover's own light background. Subtle
+     enough not to visibly change any of the other, already-saturated
+     swatch colors. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
 }
 
 .calendar-grid {
@@ -178,7 +183,15 @@
    reuses the shared --success green (the same green a "success" toast/badge
    elsewhere in the app uses) since a confirmed booking is the good outcome
    here. */
-.calendar-cell[data-status="available"] { background: var(--surface-0); }
+/* A plain white cell would otherwise blend straight into the card's own
+   white body background — a visibly stronger border (plus a faint shadow,
+   the same one .is-editable already gets on hover) keeps it standing out as
+   its own distinct box rather than disappearing into the page around it. */
+.calendar-cell[data-status="available"] {
+  background: var(--surface-0);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
 .calendar-cell[data-status="available"] .cell-status-pill { background: var(--surface-2); color: var(--text-secondary); }
 
 .calendar-cell[data-status="booked"] { background: var(--success-soft); }

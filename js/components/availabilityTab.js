@@ -632,7 +632,7 @@ function openPopover(cellEl) {
     </div>
     ${
       info.status === 'on_hold' && info.onHoldAt
-        ? `<div class="status-popover-countdown">⏳ Reverts to Available in <strong id="popover-countdown-time"></strong></div>`
+        ? `<div class="status-popover-countdown">⏳ On Hold End in <strong id="popover-countdown-time"></strong></div>`
         : ''
     }
     ${
@@ -819,7 +819,7 @@ function openOnHoldCountdownPopover(cellEl) {
   const popover = document.createElement('div');
   popover.className = 'status-popover';
   popover.innerHTML = `
-    <div class="status-popover-countdown">⏳ Reverts to Available in <strong id="popover-countdown-time"></strong></div>
+    <div class="status-popover-countdown">⏳ On Hold End in <strong id="popover-countdown-time"></strong></div>
   `;
   document.body.appendChild(popover);
   popover.addEventListener('click', (event) => event.stopPropagation());

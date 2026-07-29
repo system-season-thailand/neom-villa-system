@@ -12,7 +12,30 @@ export function closeActiveDatePicker() {
   activeDatePicker?.close();
   activeDatePicker = null;
 }
-document.addEventListener('click', closeActiveDatePicker);
+
+// Capture phase, and checks the actual click target instead of relying on
+// the click bubbling all the way up to document unobstructed. A plain
+// bubble-phase document listener (what this used to be) silently stops
+// working the moment a picker is opened from inside something that calls
+// event.stopPropagation() on its own clicks for unrelated reasons — e.g. the
+// Prices tab's Add/Edit Pricing Rule modal does exactly that (see
+// modal.js), which meant clicking anywhere inside that modal but outside
+// the popover never closed it. Running in the capture phase means this
+// always sees the click first, before any such stopPropagation() further
+// down the tree gets a chance to matter. The trigger itself is deliberately
+// excluded so its own click handler keeps sole control of toggling its
+// picker open/closed, rather than this racing ahead of it and immediately
+// reopening what it just closed.
+document.addEventListener(
+  'click',
+  (event) => {
+    if (!activeDatePicker) return;
+    if (activeDatePicker.trigger.contains(event.target)) return;
+    if (activeDatePicker.popoverEl.contains(event.target)) return;
+    closeActiveDatePicker();
+  },
+  true
+);
 
 /**
  * A small inline calendar popover standing in for `<input type="date">` —
@@ -73,7 +96,7 @@ export function createDatePicker({ value: initialValue, disabledDates = new Set(
     popoverEl.style.top = `${Math.max(10, top)}px`;
     popoverEl.style.left = `${Math.max(10, left)}px`;
 
-    activeDatePicker = { close };
+    activeDatePicker = { close, trigger, popoverEl };
   }
 
   function close() {

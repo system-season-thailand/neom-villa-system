@@ -6,10 +6,11 @@ const TABLE = 'neom_availability';
 
 // Swatch/dot colors for the legend and status-popover option buttons — kept
 // in sync with the actual cell colors in css/availability.css. Available's
-// dot is a neutral gray rather than literal white, which wouldn't read as a
-// visible dot at all against the legend/popover's own light background.
+// dot is literal white — .legend-swatch has its own inset ring so a white
+// dot still reads as a visible (outlined) circle rather than disappearing
+// against the legend/popover's own light background.
 export const STATUSES = {
-  available: { label: 'Available', color: '#93959e' },
+  available: { label: 'Available', color: '#ffffff' },
   booked: { label: 'Booked', color: '#1a7f5a' },
   on_hold: { label: 'On Hold', color: '#d9730d' },
   blocked: { label: 'Blocked', color: '#454b56' },
