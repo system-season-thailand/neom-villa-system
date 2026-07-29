@@ -185,31 +185,23 @@ function findPriceForDate(dateISO) {
   return state.priceRules.find((r) => r.startDate <= dateISO && dateISO <= r.endDate) || null;
 }
 
-/** `missingLabel` differs by role: the read-only front-desk view is
- * Arabic-labeled throughout (see template()'s فاتورة/اسعار/ملخص tab names),
- * so its own "no price" text matches; the admin view is English everywhere
- * else, so it gets its own English wording rather than picking up Arabic
- * text that would look out of place next to it. */
-function priceLineHtml(dateISO, missingLabel) {
+function renderPriceLine(dateISO) {
   const rule = findPriceForDate(dateISO);
   return rule
     ? `<span class="cell-price">${formatIDRShort(rule.pricePerNight)}</span>`
-    : `<span class="cell-price cell-price--missing">${missingLabel}</span>`;
-}
-
-function renderPriceLine(dateISO) {
-  return priceLineHtml(dateISO, 'لا يوجد سعر');
+    : `<span class="cell-price cell-price--missing">لا يوجد سعر</span>`;
 }
 
 /** Admin view's equivalent of the read-only calendar's price line — same
- * price, same "2.5 JT" style, on every date — plus, when the date is
- * actually booked, who booked it right above it. Admins already have the
- * full Prices tab for managing rates, but seeing them right on the
- * calendar too (not just the price-per-night table) means one less tab
- * switch to check "what would this night cost". */
+ * price, same "2.5 JT" style (and the same "لا يوجد سعر" for a date with no
+ * pricing rule), on every date — plus, when the date is actually booked,
+ * who booked it right above it. Admins already have the full Prices tab for
+ * managing rates, but seeing them right on the calendar too (not just the
+ * price-per-night table) means one less tab switch to check "what would
+ * this night cost". */
 function renderAdminLine(dateISO, info) {
   const bookerLine = info.status === 'booked' && info.bookedBy ? `<span class="cell-price">${escapeHtml(info.bookedBy)}</span>` : '';
-  return `${bookerLine}${priceLineHtml(dateISO, 'No price set')}`;
+  return `${bookerLine}${renderPriceLine(dateISO)}`;
 }
 
 // ---------------------------------------------------------------------------
