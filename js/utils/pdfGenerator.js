@@ -330,13 +330,42 @@ export async function generateInvoicePdf(invoice) {
   });
 
   const blob = doc.output('blob');
-  const fileName = displayRevision > 0
-    ? `${invoice.invoiceNumber}-rev${displayRevision}.pdf`
-    : `${invoice.invoiceNumber}.pdf`;
+  const fileName = buildFileName(invoice, displayRevision);
   return { blob, fileName };
 }
 
 function todayIsoLocal() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const ROMAN_MONTHS = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+
+/** Windows forbids \ / : * ? " < > | in filenames (macOS/Linux only forbid
+ * / , but a guest name typed on one OS still has to survive a download on
+ * any other), so a free-text guest name needs these stripped before it can
+ * safely become part of a downloaded file's name. */
+function sanitizeForFileName(text) {
+  return text.replace(/[\\/:*?"<>|]/g, '').trim();
+}
+
+/**
+ * "ALZOBIDI MOSLEH FAYEZ INV-N-VII-26-0124" (plus " Rev1", "Rev2", … for an
+ * actual revision — never "Rev0", since displayRevision 0 means this is the
+ * first-ever download of this invoice number). "INV-N-" is a fixed prefix;
+ * the roman-numeral month and 2-digit year are *today's* — the moment this
+ * PDF is actually being generated/downloaded — not any date stored on the
+ * invoice itself, so re-downloading the same saved invoice next month
+ * produces a different file name, which is by design (per the villa's own
+ * naming convention this mirrors, not a bug). The 4-digit sequence is
+ * invoiceNumber's own trailing segment, e.g. "0124" out of "INV-2026-0124".
+ */
+function buildFileName(invoice, displayRevision) {
+  const guestNameUpper = sanitizeForFileName(invoice.guestName).toUpperCase();
+  const now = new Date();
+  const monthRoman = ROMAN_MONTHS[now.getMonth()];
+  const yy = String(now.getFullYear()).slice(-2);
+  const seq = invoice.invoiceNumber.split('-').pop();
+  const revSuffix = displayRevision > 0 ? ` Rev${displayRevision}` : '';
+  return `${guestNameUpper} INV-N-${monthRoman}-${yy}-${seq}${revSuffix}.pdf`;
 }
