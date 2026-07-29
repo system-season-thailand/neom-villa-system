@@ -934,6 +934,7 @@ function escapeAttr(value) {
   return escapeHtml(value);
 }
 
+
 function template(readOnly) {
   return `
     <div class="page">
