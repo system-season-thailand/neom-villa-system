@@ -101,6 +101,17 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Read-only User calendar: an On Hold date is clickable (opens a read-only
+   countdown popover) even though nothing here is actually editable — a
+   lighter-weight affordance than .is-editable's, since there's nothing to
+   edit, just a countdown to look at. */
+.calendar-cell.is-clickable {
+  cursor: pointer;
+}
+.calendar-cell.is-clickable:hover {
+  box-shadow: var(--shadow-sm);
+}
+
 .calendar-cell.is-today .cell-date {
   color: var(--accent-dark);
   font-weight: 800;
@@ -161,12 +172,17 @@
   white-space: nowrap;
 }
 
-/* Status color themes, applied via data-status attribute */
-.calendar-cell[data-status="available"] { background: var(--success-soft); }
-.calendar-cell[data-status="available"] .cell-status-pill { background: var(--success); color: #fff; }
+/* Status color themes, applied via data-status attribute. Available is
+   plain white — there's nothing going on, so nothing to tint the cell with
+   — and its pill is a neutral gray rather than a color, to match; Booked
+   reuses the shared --success green (the same green a "success" toast/badge
+   elsewhere in the app uses) since a confirmed booking is the good outcome
+   here. */
+.calendar-cell[data-status="available"] { background: var(--surface-0); }
+.calendar-cell[data-status="available"] .cell-status-pill { background: var(--surface-2); color: var(--text-secondary); }
 
-.calendar-cell[data-status="booked"] { background: var(--danger-soft); }
-.calendar-cell[data-status="booked"] .cell-status-pill { background: var(--danger); color: #fff; }
+.calendar-cell[data-status="booked"] { background: var(--success-soft); }
+.calendar-cell[data-status="booked"] .cell-status-pill { background: var(--success); color: #fff; }
 
 .calendar-cell[data-status="on_hold"] { background: var(--hold-soft); }
 .calendar-cell[data-status="on_hold"] .cell-status-pill { background: var(--hold); color: #fff; }
@@ -345,6 +361,20 @@
   color: var(--text-muted);
   text-transform: none;
   letter-spacing: normal;
+}
+
+.status-popover-countdown {
+  margin: 8px 8px 2px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--hold-soft);
+  color: var(--hold);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+.status-popover-countdown strong {
+  font-variant-numeric: tabular-nums;
 }
 
 .status-popover-notes {

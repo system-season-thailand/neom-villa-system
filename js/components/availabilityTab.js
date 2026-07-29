@@ -96,7 +96,8 @@ function fromRealtimeRow(row) {
     statusColor: row.status_color,
     notes: row.notes || '',
     bookedBy: row.booked_by || '',
-    bookedAt: row.booked_at || null
+    bookedAt: row.booked_at || null,
+    onHoldAt: row.on_hold_at || null
   };
 }
 
@@ -454,6 +455,12 @@ function render() {
       // visually distinct (dimmed, "Passed & X" label below), never locked
       // out, so a forgotten/incorrect date can always be corrected.
       const editable = day.inCurrentMonth && !state.readOnly;
+      // The read-only User calendar has no editing at all, but an On Hold
+      // date is still clickable there — the only thing it opens is a
+      // read-only countdown to when it reverts to Available (see
+      // attachReadOnlyOnHoldClick), never the admin's status-changing popover.
+      const readOnlyClickable = state.readOnly && day.inCurrentMonth && info.status === 'on_hold';
+      const focusable = editable || readOnlyClickable;
       // Never true for the empty padding cells that fill out the grid with
       // adjacent months' dates — those aren't real cells of the month on
       // screen and have no click handler wired up at all (see the
@@ -477,11 +484,11 @@ function render() {
       return `
         <button
           type="button"
-          class="calendar-cell${day.inCurrentMonth ? '' : ' is-empty'}${day.iso === today ? ' is-today' : ''}${isPassedDate ? ' is-passed' : ''}${editable ? ' is-editable' : ''}${selected ? ' is-selected' : ''}${linked ? ' is-linked' : ''}"
+          class="calendar-cell${day.inCurrentMonth ? '' : ' is-empty'}${day.iso === today ? ' is-today' : ''}${isPassedDate ? ' is-passed' : ''}${editable ? ' is-editable' : ''}${readOnlyClickable ? ' is-clickable' : ''}${selected ? ' is-selected' : ''}${linked ? ' is-linked' : ''}"
           data-date="${day.iso}"
           ${day.inCurrentMonth ? `data-status="${info.status}"` : ''}
           ${linkedTitle ? `title="${escapeAttr(linkedTitle)}"` : ''}
-          ${editable ? '' : 'tabindex="-1" aria-disabled="true"'}
+          ${focusable ? '' : 'tabindex="-1" aria-disabled="true"'}
         >
           <span class="cell-date">${day.day}</span>
           ${
@@ -501,6 +508,9 @@ function render() {
     WEEKDAYS.map((w) => `<div class="calendar-weekday">${w}</div>`).join('') + cellsHtml;
 
   els.grid.querySelectorAll('.calendar-cell.is-editable').forEach(attachCellInteractions);
+  if (state.readOnly) {
+    els.grid.querySelectorAll('.calendar-cell.is-clickable').forEach(attachReadOnlyOnHoldClick);
+  }
 }
 
 const LONG_PRESS_MS = 500;
@@ -621,6 +631,11 @@ function openPopover(cellEl) {
       <input class="input status-popover-notes-input" type="text" id="popover-notes" placeholder="Optional note" value="${escapeAttr(info.notes)}" />
     </div>
     ${
+      info.status === 'on_hold' && info.onHoldAt
+        ? `<div class="status-popover-countdown">⏳ Reverts to Available in <strong id="popover-countdown-time"></strong></div>`
+        : ''
+    }
+    ${
       linked
         ? `<div class="status-popover-linked">
              🔗 ${escapeHtml(formatDisplayDate(linked.startDate))} – ${escapeHtml(formatDisplayDate(linked.endDate))}${linked.note ? ' — ' + escapeHtml(linked.note) : ''}
@@ -631,6 +646,11 @@ function openPopover(cellEl) {
   `;
 
   document.body.appendChild(popover);
+  // Started before positioning — same reasoning as openBookedByPopover's own
+  // comment below: this popover's final height depends on the countdown
+  // text actually being filled in, not the empty <strong> it starts as.
+  const countdownIntervalId =
+    info.status === 'on_hold' && info.onHoldAt ? startOnHoldCountdown(popover, dateISO, info.onHoldAt) : null;
   positionPopover(popover, rect);
 
   popover.querySelector('#popover-unlink')?.addEventListener('click', (event) => {
@@ -668,7 +688,7 @@ function openPopover(cellEl) {
 
   popover.addEventListener('click', (event) => event.stopPropagation());
 
-  activePopover = { el: popover, dateISO };
+  activePopover = { el: popover, dateISO, intervalId: countdownIntervalId };
 }
 
 /**
@@ -722,9 +742,99 @@ function positionPopover(popover, rect) {
 
 function closePopover() {
   if (activePopover) {
+    if (activePopover.intervalId) clearInterval(activePopover.intervalId);
     activePopover.el.remove();
     activePopover = null;
   }
+}
+
+/** "23h 59m 09s" — deliberately not compacted to omit the hours once they
+ * hit 0, so the format never visually reflows partway through the count. */
+function formatCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+}
+
+/**
+ * Wires up a live, once-a-second "time remaining" countdown inside an
+ * already-appended popover — shared by the admin status-popover and the
+ * read-only User's countdown-only popover (see openOnHoldCountdownPopover).
+ * The moment it reaches zero, this proactively deletes the row itself
+ * (rather than waiting for the next sql/011_on_hold_auto_revert.sql cron
+ * sweep, which can lag up to 5 minutes) so whoever's actually watching sees
+ * the revert happen immediately; the pg_cron sweep remains the real
+ * backstop for every date nobody happens to be looking at. Returns the
+ * interval id so the caller can stash it on activePopover for closePopover
+ * to clear.
+ */
+function startOnHoldCountdown(popoverEl, dateISO, onHoldAt) {
+  const timeEl = popoverEl.querySelector('#popover-countdown-time');
+  if (!timeEl) return null;
+  const deadline = new Date(onHoldAt).getTime() + availabilityService.ON_HOLD_MS;
+  let intervalId = null;
+
+  const tick = async () => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      if (intervalId) clearInterval(intervalId);
+      try {
+        await availabilityService.clearStatus(dateISO);
+        state.statuses.delete(dateISO);
+      } catch {
+        // Best-effort — the pg_cron sweep still catches this shortly even
+        // if this immediate revert attempt fails (e.g. offline).
+      }
+      closePopover();
+      render();
+      return;
+    }
+    timeEl.textContent = formatCountdown(remaining);
+  };
+
+  tick();
+  intervalId = setInterval(tick, 1000);
+  return intervalId;
+}
+
+/**
+ * The only click behavior the read-only User calendar offers at all: an On
+ * Hold date opens a countdown-only popover (no status options, no notes —
+ * a normal user can't change any date's status) showing when it reverts to
+ * Available.
+ */
+function openOnHoldCountdownPopover(cellEl) {
+  const dateISO = cellEl.dataset.date;
+  if (activePopover && activePopover.dateISO === dateISO) {
+    closePopover();
+    return;
+  }
+  closePopover();
+
+  const info = state.statuses.get(dateISO);
+  if (!info?.onHoldAt) return;
+
+  const popover = document.createElement('div');
+  popover.className = 'status-popover';
+  popover.innerHTML = `
+    <div class="status-popover-countdown">⏳ Reverts to Available in <strong id="popover-countdown-time"></strong></div>
+  `;
+  document.body.appendChild(popover);
+  popover.addEventListener('click', (event) => event.stopPropagation());
+
+  const intervalId = startOnHoldCountdown(popover, dateISO, info.onHoldAt);
+  positionPopover(popover, cellEl.getBoundingClientRect());
+
+  activePopover = { el: popover, dateISO, intervalId };
+}
+
+function attachReadOnlyOnHoldClick(cell) {
+  cell.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openOnHoldCountdownPopover(cell);
+  });
 }
 
 function handleOutsideClick() {

@@ -25,6 +25,12 @@ relationship between an invoice and a specific pricing rule (a stay can span
 several), so the invoice stores its own computed pricing snapshot in
 `invoice_data` rather than referencing `neom_price` rows.
 
+To wipe every saved invoice and restart numbering from a specific point
+(e.g. `INV-2026-0125`), run `sql/reset_invoice_numbering.sql` — a standalone,
+destructive script kept out of the normal numbered setup sequence on
+purpose, since it's a "run only when you actually mean it" operation, not
+something run once during setup. See `sql/README.md` for details.
+
 ## Why no Storage bucket
 
 `pdfGenerator.js` builds the invoice PDF entirely from `invoice_data` —
@@ -71,12 +77,13 @@ villa-type-specific pricing is needed later, see `FUTURE_IMPROVEMENTS.md`.
 
 | Column | Type | Notes |
 |---|---|---|
-| `date` | date, PK | One row per date that has ever been set |
-| `status` | text | `available` \| `booked` \| `on_hold` \| `blocked` — **not** `passed` (see below) |
+| `date` | date, PK | One row per date currently `booked`, `on_hold`, or `blocked` |
+| `status` | text | `booked` \| `on_hold` \| `blocked` — **not** `available` or `passed` (see below) |
 | `status_color` | text | Hex color, set automatically by a trigger from `status` — never chosen by the client |
 | `notes` | text | Optional |
 | `booked_by` | text | Who made the booking — only meaningful (and only ever stored) when `status = 'booked'`; cleared to `NULL` for every other status. Feeds the "ملخص" (Summary) tab's per-booker breakdown — see below. |
 | `booked_at` | timestamptz | When this date's status *became* `'booked'` — set automatically by a trigger (`sql/008_add_booked_at.sql`), never chosen by the client. Preserved across later saves that keep the status as `'booked'` (e.g. editing notes), cleared to `NULL` the moment status moves away from `'booked'`. Shown as "Booked on …" next to the Booked option in the Availability calendar's status popover. |
+| `on_hold_at` | timestamptz | When this date's status *became* `'on_hold'` — same pattern as `booked_at`, set/cleared by the same trigger (`sql/010_add_on_hold_at.sql`). Drives both the 24-hour auto-revert (below) and the live countdown shown when an On Hold date is clicked. |
 
 **This table is sparse by design.** It is not pre-populated with every
 calendar date. A date with no row is treated by the app as:
@@ -84,13 +91,20 @@ calendar date. A date with no row is treated by the app as:
 - **Passed**, if the date is before today
 - **Available**, if the date is today or in the future
 
-This is why `status` cannot be set to `'passed'` — the check constraint only
-allows the four staff-settable values. "Passed" (for a date with no stored
-row) is a pure function of `date < CURRENT_DATE`, computed by the app (see
+This is why `status` cannot be set to `'passed'` or `'available'` — the
+check constraint only allows the three staff-settable values that actually
+need a row (`sql/009_stop_storing_available.sql` tightened this from the
+original four; most dates are Available, so storing a row for every one of
+them would have defeated the whole point of the table being sparse). Both
+"Passed" and "Available" for a date with no stored row are a pure function
+of `date` vs. `CURRENT_DATE`, computed by the app (see
 `getStatusesInRange()` in `js/services/availabilityService.js`) every time
-the calendar is rendered, which is also why it requires no cron job,
+the calendar is rendered, which is also why neither one requires a cron job,
 scheduled function, or nightly batch update: it's correct by construction, at
-any moment, with zero maintenance.
+any moment, with zero maintenance. Choosing "Available" from the status
+popover, or a passed date's "Passed" revert option, works by deleting the
+row outright (see `clearStatus()` / `setStatus()`) rather than writing
+either value into it.
 
 A date that *does* have a stored row keeps its real status even once it's in
 the past — `getStatusesInRange()` never overwrites it to `'passed'`. The
@@ -100,6 +114,22 @@ status color, and — unlike a plain never-touched passed date — it stays
 editable, so an admin who forgot to update a date can still go back and fix
 it after the fact. The read-only (User role) calendar still hides every
 passed date outright regardless of its status, unchanged from before.
+
+**On Hold auto-reverts after 24 hours.** `sql/011_on_hold_auto_revert.sql`
+schedules a `pg_cron` job that runs every 5 minutes and deletes any row
+where `status = 'on_hold'` and `on_hold_at` is 24+ hours old — reverting it
+to Available with nobody needing the app open for it to happen. The app also
+treats an On Hold date as expired the instant anyone actually looks at it
+(`isExpiredOnHold()` in `availabilityService.js`), so the calendar never
+shows a stale On Hold status just because the cron job hasn't ticked yet —
+that client-side check is a display nicety on top of the real, always-on
+cron backstop, not a replacement for it. Clicking an On Hold date (as either
+the Admin or a read-only User) opens a popover with a live, once-a-second
+countdown to that same deadline; if it's still counting down when it hits
+zero, the popover itself deletes the row immediately rather than waiting for
+the next cron tick, so whoever's watching sees the revert happen right away.
+An admin can still change an On Hold date to any other status at any time
+before that, exactly like any other date.
 
 **Live sync across devices:** `sql/007_enable_availability_realtime.sql`
 adds this table to Supabase's `supabase_realtime` publication. The

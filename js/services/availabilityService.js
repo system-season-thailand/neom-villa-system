@@ -4,9 +4,13 @@ import { todayISO, addDays } from '../utils/dateUtils.js';
 
 const TABLE = 'neom_availability';
 
+// Swatch/dot colors for the legend and status-popover option buttons — kept
+// in sync with the actual cell colors in css/availability.css. Available's
+// dot is a neutral gray rather than literal white, which wouldn't read as a
+// visible dot at all against the legend/popover's own light background.
 export const STATUSES = {
-  available: { label: 'Available', color: '#1a7f5a' },
-  booked: { label: 'Booked', color: '#c1402c' },
+  available: { label: 'Available', color: '#93959e' },
+  booked: { label: 'Booked', color: '#1a7f5a' },
   on_hold: { label: 'On Hold', color: '#d9730d' },
   blocked: { label: 'Blocked', color: '#454b56' },
   passed: { label: 'Passed', color: '#aeb2ba' }
@@ -19,22 +23,51 @@ function fromRow(row) {
     statusColor: row.status_color,
     notes: row.notes || '',
     bookedBy: row.booked_by || '',
-    bookedAt: row.booked_at || null
+    bookedAt: row.booked_at || null,
+    onHoldAt: row.on_hold_at || null
+  };
+}
+
+/** How long an On Hold date stays on hold before it's treated as Available
+ * again — see ON_HOLD_MS's two enforcement points: the pg_cron sweep in
+ * sql/011_on_hold_auto_revert.sql (the real, always-on backstop, since it
+ * runs whether or not anyone has the app open), and isExpiredOnHold below
+ * (an immediate, client-side "don't wait for the next cron tick" check so
+ * the calendar reflects the revert the instant someone actually looks). */
+export const ON_HOLD_MS = 24 * 60 * 60 * 1000;
+
+function isExpiredOnHold(row) {
+  return row.status === 'on_hold' && row.onHoldAt && Date.now() - new Date(row.onHoldAt).getTime() >= ON_HOLD_MS;
+}
+
+/** The implicit default for a date with no (or no longer relevant) stored
+ * row: "passed" if the date is before today, otherwise "available". */
+function fallbackFor(iso, today) {
+  const isPassed = iso < today;
+  return {
+    date: iso,
+    status: isPassed ? 'passed' : 'available',
+    statusColor: isPassed ? STATUSES.passed.color : STATUSES.available.color,
+    notes: '',
+    bookedBy: '',
+    bookedAt: null,
+    onHoldAt: null
   };
 }
 
 /**
- * Returns a Map<dateISO, {date,status,statusColor,notes,bookedBy,bookedAt}>
+ * Returns a Map<dateISO, {date,status,statusColor,notes,bookedBy,bookedAt,onHoldAt}>
  * covering every day in [startISO, endISO] inclusive. Dates without a stored
- * row are filled in with the implicit default: "passed" if the date is
- * before today, otherwise "available". This keeps the table sparse — staff
- * only ever write a row when a date actually changes state.
+ * row are filled in with the implicit default (see fallbackFor). This keeps
+ * the table sparse — staff only ever write a row when a date actually
+ * changes state.
  *
- * A stored row's real status (booked/on_hold/blocked/available) is always
- * preserved as-is, even for a date in the past — the UI layer (see
- * availabilityTab.js) is the one that decides how to *label* a past date
- * that still carries a real status (e.g. "Passed & Booked"), so an admin can
- * still see and correct what actually happened on that date.
+ * A stored row's real status (booked/on_hold/blocked) is always preserved
+ * as-is, even for a date in the past — the UI layer (see availabilityTab.js)
+ * is the one that decides how to *label* a past date that still carries a
+ * real status (e.g. "Passed & Booked"), so an admin can still see and
+ * correct what actually happened on that date. The one exception is an On
+ * Hold row whose 24 hours are already up: see isExpiredOnHold above.
  */
 export async function getStatusesInRange(startISO, endISO) {
   const { data, error } = await supabaseClient
@@ -55,19 +88,7 @@ export async function getStatusesInRange(startISO, endISO) {
   let iso = startISO;
   while (iso <= endISO) {
     const stored = byDate.get(iso);
-    if (stored) {
-      result.set(iso, stored);
-    } else {
-      const isPassed = iso < today;
-      result.set(iso, {
-        date: iso,
-        status: isPassed ? 'passed' : 'available',
-        statusColor: isPassed ? STATUSES.passed.color : STATUSES.available.color,
-        notes: '',
-        bookedBy: '',
-        bookedAt: null
-      });
-    }
+    result.set(iso, stored && !isExpiredOnHold(stored) ? stored : fallbackFor(iso, today));
     iso = addDays(iso, 1);
   }
   return result;
@@ -90,17 +111,32 @@ function assertBookedByPresent(status, bookedBy) {
   }
 }
 
+/** The object shape a fresh/never-stored date has — same as fallbackFor's
+ * non-passed case above. Used to hand back a consistent result after
+ * deleting a row for 'available', since there's no upserted row to read one
+ * back from. */
+function availableFallback(dateISO) {
+  return { date: dateISO, status: 'available', statusColor: STATUSES.available.color, notes: '', bookedBy: '', bookedAt: null, onHoldAt: null };
+}
+
 /**
  * Sets the status for a single date, past or future — admins can go back
  * and correct a passed date they forgot to update (e.g. mark it Booked
  * after the fact), same as any upcoming date. `bookedBy` is only ever
  * actually stored when `status` is 'booked' — for every other status it's
  * cleared, so a booker's name never lingers on a date that's no longer
- * booked.
+ * booked. 'available' is never written as a row at all — most dates are
+ * Available, so the table stays sparse by deleting the row outright instead
+ * (same as clearStatus/'passed'), discarding any notes on it in the process.
  */
 export async function setStatus(dateISO, status, notes = '', bookedBy = '') {
   assertEditable(status);
   assertBookedByPresent(status, bookedBy);
+
+  if (status === 'available') {
+    await clearStatus(dateISO);
+    return availableFallback(dateISO);
+  }
 
   const { data, error } = await supabaseClient
     .from(TABLE)
@@ -126,6 +162,12 @@ export async function setStatusBulk(dateIsoList, status, notes = '', bookedBy = 
   if (!dateIsoList.length) return [];
   assertEditable(status);
   assertBookedByPresent(status, bookedBy);
+
+  if (status === 'available') {
+    const { error } = await supabaseClient.from(TABLE).delete().in('date', dateIsoList);
+    if (error) throw friendlyDbError(error, 'Could not update availability for the selected dates.');
+    return dateIsoList.map(availableFallback);
+  }
 
   const rows = dateIsoList.map((date) => ({
     date,
