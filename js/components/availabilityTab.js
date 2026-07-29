@@ -937,8 +937,8 @@ function escapeAttr(value) {
 function template(readOnly) {
   return `
     <div class="page">
-      <div class="card">
-        <div class="card-body" style="background: rgb(230, 230, 230) !important; padding: 5px !important;">
+      <div class="card" style="background: rgb(230, 230, 230) !important; padding: 10px 5px !important;">
+        <div class="card-body" style="padding: 0 !important;">
           <div class="calendar-toolbar">
             <div class="calendar-nav">
               <button class="btn btn-icon btn-secondary" id="calendar-prev" type="button" aria-label="Previous month">‹</button>
