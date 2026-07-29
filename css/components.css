@@ -630,7 +630,7 @@ textarea.input {
    ========================================================================== */
 @media (max-width: 640px) {
   .card-body {
-    padding: 12px;
+    padding: 0;
   }
 
   .card-header {

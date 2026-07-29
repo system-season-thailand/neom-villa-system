@@ -138,9 +138,9 @@ async function load() {
   try {
     const [statuses, priceRules] = await Promise.all([
       availabilityService.getStatusesInRange(startISO, endISO),
-      // Only the read-only (User role) view shows per-date prices — admins
-      // already have the full Prices tab, so skip this fetch for them.
-      state.readOnly ? priceService.findRatesForRange(startISO, addDays(endISO, 1)) : Promise.resolve([])
+      // Both roles show per-date prices now — admins get them right on the
+      // calendar too, not just via the separate Prices tab.
+      priceService.findRatesForRange(startISO, addDays(endISO, 1))
     ]);
     state.statuses = statuses;
     state.priceRules = priceRules;
@@ -185,19 +185,31 @@ function findPriceForDate(dateISO) {
   return state.priceRules.find((r) => r.startDate <= dateISO && dateISO <= r.endDate) || null;
 }
 
-function renderPriceLine(dateISO) {
+/** `missingLabel` differs by role: the read-only front-desk view is
+ * Arabic-labeled throughout (see template()'s فاتورة/اسعار/ملخص tab names),
+ * so its own "no price" text matches; the admin view is English everywhere
+ * else, so it gets its own English wording rather than picking up Arabic
+ * text that would look out of place next to it. */
+function priceLineHtml(dateISO, missingLabel) {
   const rule = findPriceForDate(dateISO);
   return rule
     ? `<span class="cell-price">${formatIDRShort(rule.pricePerNight)}</span>`
-    : `<span class="cell-price cell-price--missing">لا يوجد سعر</span>`;
+    : `<span class="cell-price cell-price--missing">${missingLabel}</span>`;
 }
 
-/** Admin-only equivalent of renderPriceLine above — the same cell-price
- * styling, but showing who booked this date rather than its nightly rate
- * (admins already have the full Prices tab for rates). */
-function renderBookerLine(info) {
-  if (info.status !== 'booked' || !info.bookedBy) return '';
-  return `<span class="cell-price">${escapeHtml(info.bookedBy)}</span>`;
+function renderPriceLine(dateISO) {
+  return priceLineHtml(dateISO, 'لا يوجد سعر');
+}
+
+/** Admin view's equivalent of the read-only calendar's price line — same
+ * price, same "2.5 JT" style, on every date — plus, when the date is
+ * actually booked, who booked it right above it. Admins already have the
+ * full Prices tab for managing rates, but seeing them right on the
+ * calendar too (not just the price-per-night table) means one less tab
+ * switch to check "what would this night cost". */
+function renderAdminLine(dateISO, info) {
+  const bookerLine = info.status === 'booked' && info.bookedBy ? `<span class="cell-price">${escapeHtml(info.bookedBy)}</span>` : '';
+  return `${bookerLine}${priceLineHtml(dateISO, 'No price set')}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,7 +506,7 @@ function render() {
           ${
             day.inCurrentMonth
               ? `<div class="cell-bottom">
-                   ${state.readOnly ? renderPriceLine(day.iso) : renderBookerLine(info)}
+                   ${state.readOnly ? renderPriceLine(day.iso) : renderAdminLine(day.iso, info)}
                    <span class="cell-status-pill">${statusLabel}</span>
                    ${info.notes ? `<span class="cell-note" title="${escapeAttr(info.notes)}">${escapeHtml(info.notes)}</span>` : ''}
                  </div>`
@@ -632,7 +644,7 @@ function openPopover(cellEl) {
     </div>
     ${
       info.status === 'on_hold' && info.onHoldAt
-        ? `<div class="status-popover-countdown">⏳ On Hold End in <strong id="popover-countdown-time"></strong></div>`
+        ? `<div class="status-popover-countdown">⏳ Hold End in <strong id="popover-countdown-time"></strong></div>`
         : ''
     }
     ${
@@ -819,7 +831,7 @@ function openOnHoldCountdownPopover(cellEl) {
   const popover = document.createElement('div');
   popover.className = 'status-popover';
   popover.innerHTML = `
-    <div class="status-popover-countdown">⏳ On Hold End in <strong id="popover-countdown-time"></strong></div>
+    <div class="status-popover-countdown">⏳ Hold End in <strong id="popover-countdown-time"></strong></div>
   `;
   document.body.appendChild(popover);
   popover.addEventListener('click', (event) => event.stopPropagation());
@@ -934,7 +946,7 @@ function template(readOnly) {
   return `
     <div class="page">
       <div class="card">
-        <div class="card-body">
+        <div class="card-body" style="background: rgb(230, 230, 230) !important; padding: 5px !important;">
           <div class="calendar-toolbar">
             <div class="calendar-nav">
               <button class="btn btn-icon btn-secondary" id="calendar-prev" type="button" aria-label="Previous month">‹</button>

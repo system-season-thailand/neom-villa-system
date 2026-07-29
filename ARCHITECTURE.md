@@ -167,14 +167,16 @@ the فاتورة/اسعار/ملخص tab buttons entirely for `'user'` (they're 
 mounted — `invoiceTab.js`/`pricesTab.js`/`summaryTab.js` aren't even fetched
 for that role) and `availabilityTab.mount(el, { readOnly: role === 'user' })`
 disabling every interactive affordance on the calendar (no cell clicks, no
-bulk-select bar), leaving it a pure status display. The read-only view also
-fetches `neom_price` for the visible month (admins don't pay this cost —
-they have the full اسعار tab) and prints each date's nightly rate above its
-status pill, in red ("لا يوجد سعر") for any date no pricing rule covers —
-see `findPriceForDate()` in `availabilityTab.js`. Admins get the mirror
-image on booked dates instead: `renderBookerLine()` prints whoever's
-selected in that date's Booked By field, reusing the exact same `cell-price`
-styling for a name instead of a rate.
+bulk-select bar), leaving it a pure status display. Both roles fetch
+`neom_price` for the visible month and print each date's nightly rate above
+its status pill — Arabic ("لا يوجد سعر") for the read-only view, matching
+its own فاتورة/اسعار/ملخص labeling, English ("No price set") for admins,
+matching theirs — for any date no pricing rule covers; see
+`findPriceForDate()` in `availabilityTab.js`. Admins additionally see who
+booked a booked date printed above that same price line, reusing the exact
+same `cell-price` styling for a name (see `renderAdminLine()`) — the read-only
+view never shows this, since a front-desk user has no Booked By field to
+begin with.
 
 **This is a UX convenience, not a security boundary.** The passwords are
 plain strings in a client-side bundle, and every Supabase table remains
