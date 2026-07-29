@@ -686,7 +686,7 @@ textarea.input {
   .stacked-table thead {
     display: none;
   }
-  .stacked-table, .stacked-table tbody, .stacked-table tr, .stacked-table td {
+  .stacked-table, .stacked-table tbody, .stacked-table tfoot, .stacked-table tr, .stacked-table td {
     display: block;
     width: 100%;
   }
@@ -729,8 +729,13 @@ textarea.input {
   }
   /* Opt a cell out of the label treatment when its own visible text already
      says what the label would (e.g. a plain "Total" placeholder cell whose
-     sibling carries data-label="Total" instead) — see pricing-table's markup. */
-  .stacked-table-omit-label {
+     sibling carries data-label="Total" instead) — see pricing-table's markup.
+     Selector includes "td" (not just the class alone) so this reliably beats
+     .stacked-table td's own display:flex above on specificity — a bare class
+     selector here previously lost that fight (one class vs. one class + one
+     element), leaving this cell visible as a stray, unlabeled "Total" line
+     stacked above the real, labeled total. */
+  .stacked-table td.stacked-table-omit-label {
     display: none;
   }
   .date-picker-popover {
