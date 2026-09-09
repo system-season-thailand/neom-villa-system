@@ -335,8 +335,12 @@ function renderBookerTable(byBooker) {
                 </button>
               </td>
             </tr>
-            <tr class="summary-guest-detail-row" id="summary-guest-row-${idx}"${isOpen ? '' : ' hidden'}>
-              <td class="summary-guest-detail-cell" colspan="7">${renderGuestDetail(b)}</td>
+            <tr class="summary-guest-detail-row${isOpen ? ' is-open' : ''}" id="summary-guest-row-${idx}"${isOpen ? '' : ' hidden'}>
+              <td class="summary-guest-detail-cell" colspan="7">
+                <div class="summary-guest-detail-anim">
+                  <div class="summary-guest-detail-clip">${renderGuestDetail(b)}</div>
+                </div>
+              </td>
             </tr>`;
             })
             .join('')}
@@ -401,6 +405,87 @@ function renderGuestName(guest) {
   return `<span class="summary-guest-name-cell"><span class="summary-guest-name" dir="auto">${escapeHtml(guest.guestName)}</span>${invoices}</span>`;
 }
 
+// Keep in sync with the transition duration on .summary-guest-detail-anim in
+// css/summary.css (--dur-base). Only used as a safety net — see closeRow().
+const DETAIL_ANIM_MS = 180;
+
+// Pending "hide once the collapse finishes" work, per row, so re-opening a
+// row mid-collapse can cancel it rather than having it hide itself a beat
+// later underneath the user.
+const pendingCollapse = new WeakMap();
+
+function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+function cancelPendingCollapse(row) {
+  const pending = pendingCollapse.get(row);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pending.wrap.removeEventListener('transitionend', pending.onEnd);
+  pendingCollapse.delete(row);
+}
+
+/**
+ * The `hidden` attribute still does the real showing and hiding — a
+ * collapsed row stays out of the layout and the accessibility tree rather
+ * than lingering at zero height — but it can't be transitioned, so it's
+ * applied a frame *before* the opening animation and only *after* the
+ * closing one. The animation itself is a grid 0fr→1fr on a wrapper inside
+ * the cell (see css/summary.css), not on the <tr>: table rows don't animate
+ * their own height reliably, and `overflow: hidden` is ignored on
+ * table-row/table-cell boxes, so there'd be nothing to clip the content
+ * against on the way down.
+ */
+function openRow(row) {
+  cancelPendingCollapse(row);
+  row.hidden = false;
+
+  if (prefersReducedMotion()) {
+    row.classList.add('is-open');
+    return;
+  }
+  // Force a style/layout flush so the collapsed (0fr) state is committed
+  // before the class change below. Without it the browser coalesces
+  // un-hiding and opening into one style recalculation, with no starting
+  // value to transition from, and the row simply snaps open. A
+  // requestAnimationFrame pair is the other common way to do this, but it
+  // silently does nothing while the page is hidden (rAF is throttled), so
+  // the row would sit open-but-unanimated until the tab came back.
+  void row.offsetHeight;
+  row.classList.add('is-open');
+}
+
+function closeRow(row) {
+  cancelPendingCollapse(row);
+  row.classList.remove('is-open');
+
+  if (prefersReducedMotion()) {
+    row.hidden = true;
+    return;
+  }
+
+  const wrap = row.querySelector('.summary-guest-detail-anim');
+  if (!wrap) {
+    row.hidden = true;
+    return;
+  }
+
+  const finish = () => {
+    cancelPendingCollapse(row);
+    row.hidden = true;
+  };
+  const onEnd = (event) => {
+    if (event.target === wrap && event.propertyName === 'grid-template-rows') finish();
+  };
+  wrap.addEventListener('transitionend', onEnd);
+  // Backstop for browsers that don't interpolate grid-template-rows: the
+  // class change still applies (so it collapses, just instantly) but no
+  // transitionend ever arrives to hide the row afterwards.
+  const timer = setTimeout(finish, DETAIL_ANIM_MS + 80);
+  pendingCollapse.set(row, { timer, wrap, onEnd });
+}
+
 /** Toggles a booker's detail row in place rather than re-rendering the whole
  * table — nothing about the data changed, only what's shown. */
 function bindBookerTableEvents(host, byBooker) {
@@ -411,8 +496,12 @@ function bindBookerTableEvents(host, byBooker) {
       const row = host.querySelector(`#summary-guest-row-${idx}`);
       if (!booker || !row) return;
 
-      const willOpen = row.hidden;
-      row.hidden = !willOpen;
+      // Read intent from the class, not from `hidden` — during a collapse
+      // the row is briefly still visible while already on its way closed.
+      const willOpen = !row.classList.contains('is-open');
+      if (willOpen) openRow(row);
+      else closeRow(row);
+
       btn.textContent = willOpen ? 'Hide Details' : 'More Details';
       btn.setAttribute('aria-expanded', String(willOpen));
       if (willOpen) state.expandedBookers.add(booker.bookedBy);

@@ -23,7 +23,7 @@ import {
   drawText,
   drawLabelValue,
   ensureArabicWebFontReady,
-  arabicTableHooks,
+  tableHooks,
   newDoc,
   sanitizeForFileName,
   todayIsoLocal
@@ -168,16 +168,17 @@ export async function generateInvoicePdf(invoice) {
       lineColor: COLOR_INK
     },
     bodyStyles: { lineWidth: { bottom: 0.2 } },
+    // Widths and weights only — halign is set for every section by
+    // tableHooks() below, since autoTable would apply it to body cells alone
+    // from here and leave the headers out of line. See pdfCommon.js.
     columnStyles: {
-      0: { halign: 'left' },
-      1: { halign: 'center' },
-      2: { halign: 'center', cellWidth: 18 },
-      3: { halign: 'center', cellWidth: 34 },
-      4: { halign: 'right', cellWidth: 34, fontStyle: 'bold' }
+      2: { cellWidth: 18 },
+      3: { cellWidth: 34 },
+      4: { cellWidth: 34, fontStyle: 'bold' }
     },
-    // Arabic season notes go through the shared canvas-rendering path — see
-    // arabicTableHooks()/renderArabicToImage() in pdfCommon.js.
-    ...arabicTableHooks({ sizePt: 9.5 })
+    // Column alignment across head/body/foot, plus Arabic season notes via
+    // the shared canvas-rendering path — see tableHooks() in pdfCommon.js.
+    ...tableHooks({ columnCount: 5, sizePt: 9.5 })
   });
 
   y = doc.lastAutoTable.finalY + 8;

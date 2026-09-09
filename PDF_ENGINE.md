@@ -89,10 +89,9 @@ an offscreen canvas at 6× the target size (roughly 300+ effective DPI at
 normal invoice text sizes) using the **Tajawal** web font — already loaded
 by `index.html` for the app's own Arabic UI text — and returns a PNG data
 URL sized in PDF millimeters, ready for `doc.addImage()`. `drawText()` and
-the `didParseCell`/`didDrawCell` autoTable hooks returned by
-`arabicTableHooks()` route Arabic strings through this instead of
-`doc.text()`; everything else on the invoice — and on the statement — is
-still pure vector.
+the `didParseCell`/`didDrawCell` autoTable hooks returned by `tableHooks()`
+route Arabic strings through this instead of `doc.text()`; everything else
+on the invoice — and on the statement — is still pure vector.
 
 **Trade-off, stated plainly:** the Arabic guest name (or an Arabic season
 note) is a small embedded image, not selectable/searchable text, inside an
@@ -106,6 +105,34 @@ jsPDF's built-in Helvetica, one of the 14 standard PDF fonts, which is never
 embedded in the file at all. A typical English-only invoice therefore stays
 a few KB; only an invoice actually containing Arabic text pays the (small,
 per-string) cost of an embedded PNG.
+
+## Table column alignment
+
+Every table in both documents follows one rule, in `columnAlign()`
+(`pdfCommon.js`): **first column left, last column right, everything in
+between centred.**
+
+It lives there rather than in each table's own `columnStyles` because of a
+jsPDF-AutoTable behaviour that is easy to get wrong and hard to spot:
+
+> **AutoTable v3 merges `columnStyles` into body cells only.** Head and foot
+> cells are built from `styles` + `headStyles`/`footStyles` and never see
+> `columnStyles` at all.
+
+So the obvious way to align a column — `columnStyles: { 2: { halign:
+'center' } }` — silently aligns the *numbers* while leaving the *header*
+left-aligned above them, out of line. Setting `halign` inside
+`tableHooks()`'s `didParseCell` instead reaches head, body and foot alike,
+which is the only way to keep a header over its own values.
+
+The practical rule when adding or changing a table: pass `columnCount` to
+`tableHooks()` and keep `halign` out of `columnStyles` entirely — use that
+for widths, font weights and colours only.
+
+Arabic cells follow the same alignment. `didDrawCell` places the rendered
+image at the left edge, centre or right edge of the cell according to the
+column's resolved `halign`, so an Arabic guest name lines up under its
+header exactly as a Latin one does.
 
 ## Revision workflow
 

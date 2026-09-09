@@ -143,15 +143,60 @@
 }
 
 .summary-guest-detail-cell {
-  padding: 0 0 12px !important;
+  /* No padding of its own: anything here would pop in and out at full size
+     instead of animating with the panel. The panel's own margin-bottom
+     (below) provides the gap, from inside the clipped area. */
+  padding: 0 !important;
   background: var(--surface-1);
+}
+
+/* Expand/collapse animation.
+
+   The <tr> itself is never what animates: a table row won't animate its own
+   height reliably, and `overflow: hidden` is ignored on table-row and
+   table-cell boxes, so there'd be nothing to clip the content against as it
+   collapses. Instead this wrapper animates its grid track from 0fr to 1fr,
+   which interpolates to the content's *natural* height with no JS
+   measurement and no magic max-height number to keep in sync with the
+   content. The row itself is still shown/hidden by the `hidden` attribute,
+   applied around the animation rather than during it — see openRow/closeRow
+   in js/components/summaryTab.js. */
+.summary-guest-detail-anim {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-base) var(--ease),
+    opacity var(--dur-base) var(--ease);
+}
+
+.summary-guest-detail-row.is-open .summary-guest-detail-anim {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* min-height:0 is what actually lets the 0fr track collapse — a grid item's
+   automatic minimum size would otherwise hold it open at content height.
+   overflow:hidden both clips the content on the way down and establishes a
+   block formatting context, which keeps the panel's margin-bottom inside the
+   animated area instead of collapsing out through it. */
+.summary-guest-detail-clip {
+  overflow: hidden;
+  min-height: 0;
 }
 
 .summary-guest-detail {
   padding: 12px 14px;
+  margin-bottom: 12px;
   border-left: 3px solid var(--accent);
   background: var(--surface-1);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-guest-detail-anim {
+    transition: none;
+  }
 }
 
 .summary-guest-detail-title {

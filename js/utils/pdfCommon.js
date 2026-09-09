@@ -138,33 +138,63 @@ export function drawLabelValue(doc, label, value, x, y, opts = {}) {
   });
 }
 
+const TABLE_CELL_PAD_MM = 2;
+
 /**
- * The autoTable equivalent of drawText's Arabic branch. autoTable draws its
- * own cell text, so an Arabic cell instead gets its text suppressed in
- * didParseCell (which stashes a pre-rendered image on the cell) and the
- * image placed in didDrawCell, once the cell's final x/y/height are known.
- * Spread the returned object into an autoTable() config.
+ * Where a column's text sits, by position: the first column left, the last
+ * column right, everything in between centred. One rule, applied to every
+ * table in the app so they all read the same way.
  */
-export function arabicTableHooks({ sizePt = 9.5, color = COLOR_INK, sections = ['body'] } = {}) {
+export function columnAlign(index, columnCount) {
+  if (index === 0) return 'left';
+  if (index === columnCount - 1) return 'right';
+  return 'center';
+}
+
+/**
+ * The autoTable hooks every table in this app needs. They're returned
+ * together because autoTable accepts a single `didParseCell`/`didDrawCell`
+ * pair — two concerns, but there's only one slot to put them in. Spread the
+ * result into an autoTable() config.
+ *
+ * **1. Alignment, applied to every section.** jsPDF-AutoTable v3 only ever
+ * merges `columnStyles` into *body* cells — head and foot cells see nothing
+ * but `styles` + `headStyles`/`footStyles`. So setting `halign` per column
+ * through `columnStyles` (the obvious way) silently leaves every header
+ * left-aligned, floating out of line above its own centred or right-aligned
+ * numbers. Setting it here instead reaches head, body and foot alike, which
+ * is the only way to actually keep a header over its values. Pass
+ * `columnCount` and leave `halign` out of `columnStyles` entirely — use that
+ * for widths, weights and colours only.
+ *
+ * **2. Arabic rendered via canvas** — see renderArabicToImage() above for
+ * the why. The image is placed to match whatever alignment the column
+ * resolved to, so an Arabic value lines up under its header exactly like a
+ * Latin one does.
+ */
+export function tableHooks({ columnCount, sizePt = 9.5, color = COLOR_INK } = {}) {
   return {
     didParseCell(data) {
-      if (!sections.includes(data.section)) return;
+      data.cell.styles.halign = columnAlign(data.column.index, columnCount);
+
+      if (data.section !== 'body') return;
       const text = Array.isArray(data.cell.raw) ? data.cell.raw.join(' ') : data.cell.raw;
       if (typeof text === 'string' && containsArabic(text)) {
         data.cell.__arabicImage = renderArabicToImage(text, { sizePt, weight: '400', color });
         data.cell.text = [];
-        if (!data.cell.styles.halign || data.cell.styles.halign === 'left') {
-          data.cell.styles.halign = 'right';
-        }
       }
     },
     didDrawCell(data) {
-      if (!sections.includes(data.section) || !data.cell.__arabicImage) return;
+      if (data.section !== 'body' || !data.cell.__arabicImage) return;
       const { dataUrl, widthMM, heightMM } = data.cell.__arabicImage;
-      const padRight = 2;
-      const drawX = data.cell.x + data.cell.width - widthMM - padRight;
-      const drawY = data.cell.y + (data.cell.height - heightMM) / 2;
-      data.doc.addImage(dataUrl, 'PNG', drawX, drawY, widthMM, heightMM);
+      const { x, width, y, height } = data.cell;
+
+      let drawX;
+      if (data.cell.styles.halign === 'right') drawX = x + width - widthMM - TABLE_CELL_PAD_MM;
+      else if (data.cell.styles.halign === 'center') drawX = x + (width - widthMM) / 2;
+      else drawX = x + TABLE_CELL_PAD_MM;
+
+      data.doc.addImage(dataUrl, 'PNG', drawX, y + (height - heightMM) / 2, widthMM, heightMM);
     }
   };
 }

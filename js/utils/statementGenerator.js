@@ -25,7 +25,7 @@ import {
   drawText,
   drawLabelValue,
   ensureArabicWebFontReady,
-  arabicTableHooks,
+  tableHooks,
   newDoc,
   sanitizeForFileName,
   todayIsoLocal
@@ -202,15 +202,17 @@ function drawBookerTable(doc, y, byBooker) {
       formatNumber(b.areaGuard),
       formatNumber(b.villaGuard)
     ]),
+    // Widths, weights and colours only — halign comes from tableHooks()
+    // below so the headers stay in line with their own values.
     columnStyles: {
-      0: { halign: 'left', cellWidth: 44 },
-      1: { halign: 'center', cellWidth: 15 },
-      2: { halign: 'right', cellWidth: 29, fontStyle: 'bold' },
-      3: { halign: 'right', cellWidth: 29 },
-      4: { halign: 'right', cellWidth: 28, textColor: COLOR_MUTED },
-      5: { halign: 'right', cellWidth: 29, textColor: COLOR_MUTED }
+      0: { cellWidth: 44 },
+      1: { cellWidth: 15 },
+      2: { cellWidth: 29, fontStyle: 'bold' },
+      3: { cellWidth: 29 },
+      4: { cellWidth: 28, textColor: COLOR_MUTED },
+      5: { cellWidth: 29, textColor: COLOR_MUTED }
     },
-    ...arabicTableHooks({ sizePt: 9 })
+    ...tableHooks({ columnCount: 6, sizePt: 9 })
   });
 
   return doc.lastAutoTable.finalY + 10;
@@ -251,12 +253,12 @@ function drawGuestSections(doc, y, byBooker) {
         formatNumber(g.commission)
       ]),
       columnStyles: {
-        0: { halign: 'left', cellWidth: 90 },
-        1: { halign: 'center', cellWidth: 18 },
-        2: { halign: 'right', cellWidth: 33 },
-        3: { halign: 'right', cellWidth: 33, fontStyle: 'bold' }
+        0: { cellWidth: 90 },
+        1: { cellWidth: 18 },
+        2: { cellWidth: 33 },
+        3: { cellWidth: 33, fontStyle: 'bold' }
       },
-      ...arabicTableHooks({ sizePt: 9 })
+      ...tableHooks({ columnCount: 4, sizePt: 9 })
     });
 
     y = doc.lastAutoTable.finalY + 8;
@@ -293,12 +295,12 @@ function drawMonthTable(doc, y, byMonth) {
       formatNumber(m.netRevenue)
     ]),
     columnStyles: {
-      0: { halign: 'left', cellWidth: 54 },
-      1: { halign: 'center', cellWidth: 22 },
-      2: { halign: 'right', cellWidth: 49 },
-      3: { halign: 'right', cellWidth: 49, fontStyle: 'bold' }
+      0: { cellWidth: 54 },
+      1: { cellWidth: 22 },
+      2: { cellWidth: 49 },
+      3: { cellWidth: 49, fontStyle: 'bold' }
     },
-    ...arabicTableHooks({ sizePt: 9 })
+    ...tableHooks({ columnCount: 4, sizePt: 9 })
   });
 }
 
