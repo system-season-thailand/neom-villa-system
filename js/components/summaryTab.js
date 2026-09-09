@@ -3,6 +3,7 @@ import { toast } from './toast.js';
 import { createDatePicker } from './datePicker.js';
 import { toISO, parseISO, monthLabel, formatDisplayDate } from '../utils/dateUtils.js';
 import { formatIDR } from '../utils/format.js';
+import { generateSummaryStatementPdf } from '../utils/statementGenerator.js';
 
 const PRESETS = [
   { key: 'this_month', label: 'This Month' },
@@ -52,6 +53,7 @@ export function mount(container) {
     toSlot: container.querySelector('#summary-to-slot'),
     presetsRow: container.querySelector('#summary-presets'),
     refreshBtn: container.querySelector('#summary-refresh'),
+    statementBtn: container.querySelector('#btn-download-statement'),
     totalNights: container.querySelector('#summary-total-nights'),
     totalRevenue: container.querySelector('#summary-total-revenue'),
     totalCommission: container.querySelector('#summary-total-commission'),
@@ -62,7 +64,17 @@ export function mount(container) {
   };
 
   const initial = rangeForPreset('this_month');
-  state = { from: initial.from, to: initial.to, loading: true, data: null };
+  state = {
+    from: initial.from,
+    to: initial.to,
+    loading: true,
+    data: null,
+    // Which bookers currently have their guest breakdown open. Keyed by
+    // booker name rather than row index so an expansion survives a reload
+    // that reorders the table (rows are sorted by revenue).
+    expandedBookers: new Set(),
+    downloading: false
+  };
 
   fromPicker = createDatePicker({
     value: state.from,
@@ -101,6 +113,7 @@ export function mount(container) {
   els.monthPrev.addEventListener('click', () => navigateMonth(-1));
   els.monthNext.addEventListener('click', () => navigateMonth(1));
   els.refreshBtn.addEventListener('click', () => load());
+  els.statementBtn.addEventListener('click', handleDownloadStatement);
 
   els.presetsRow.querySelectorAll('[data-preset]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -149,6 +162,26 @@ function navigateMonth(delta) {
 function updateMonthLabel() {
   const d = parseISO(state.from);
   els.monthLabel.textContent = monthLabel(d.getFullYear(), d.getMonth());
+}
+
+/** What to call the range currently on screen, for the statement PDF's
+ * header — the preset's own name when the range is exactly one ("This
+ * Month", "All Time"), the month's name for a clean single month, and
+ * otherwise nothing to add beyond the exact from/to dates the PDF already
+ * prints. */
+function currentRangeLabel() {
+  const preset = PRESETS.find((p) => {
+    const r = rangeForPreset(p.key);
+    return r.from === state.from && r.to === state.to;
+  });
+  if (preset) return preset.label;
+
+  const d = parseISO(state.from);
+  const asMonth = monthRange(d.getFullYear(), d.getMonth());
+  if (asMonth.from === state.from && asMonth.to === state.to) {
+    return monthLabel(d.getFullYear(), d.getMonth());
+  }
+  return '';
 }
 
 let loadDebounce = null;
@@ -202,11 +235,69 @@ async function load() {
   }
 }
 
+/**
+ * Builds the statement from exactly what's on screen — `state.data` is the
+ * result already fetched and rendered for the current range, so the PDF can
+ * never disagree with the tables it was generated from, and no extra query
+ * runs to produce it.
+ */
+async function handleDownloadStatement() {
+  if (state.loading || !state.data) {
+    toast.warning('Still loading this range — try again in a moment.');
+    return;
+  }
+  if (!state.data.totalNights) {
+    toast.error('There are no bookings in this range to put on a statement.');
+    return;
+  }
+
+  setDownloading(true);
+  try {
+    const { blob, fileName } = await generateSummaryStatementPdf({
+      from: state.from,
+      to: state.to,
+      rangeLabel: currentRangeLabel(),
+      data: state.data
+    });
+    triggerBrowserDownload(blob, fileName);
+    toast.success('Statement downloaded.');
+  } catch (err) {
+    toast.error(err.message);
+  } finally {
+    setDownloading(false);
+  }
+}
+
+function setDownloading(isDownloading) {
+  state.downloading = isDownloading;
+  els.statementBtn.classList.toggle('is-loading', isDownloading);
+  els.statementBtn.disabled = isDownloading || state.loading || !state.data?.totalNights;
+}
+
+function triggerBrowserDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 function monthKeyLabel(monthKey) {
   const [y, m] = monthKey.split('-').map(Number);
   return monthLabel(y, m - 1);
 }
 
+/**
+ * One row per booker, each with a "More Details" toggle revealing a second,
+ * nested row listing the guests behind that booker's nights. The detail row
+ * is rendered up front and hidden rather than built on demand — the data is
+ * already in hand from the same query, so there's nothing to wait for, and
+ * keeping it in the table means the mobile stacked-card layout picks it up
+ * for free.
+ */
 function renderBookerTable(byBooker) {
   if (!byBooker.length) {
     return `<div class="state-block"><div class="state-icon">📊</div><div class="state-title">No bookings in this range</div></div>`;
@@ -220,19 +311,67 @@ function renderBookerTable(byBooker) {
             <th>Nights</th>
             <th>Revenue</th>
             <th>Commission (9%)</th>
-            <th>Guard Cut (1%)</th>
+            <th>Area Guard (1%)</th>
+            <th>Villa Guard (50K)</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           ${byBooker
-            .map(
-              (b) => `
+            .map((b, idx) => {
+              const isOpen = state.expandedBookers.has(b.bookedBy);
+              return `
             <tr>
-              <td data-label="Booker">${escapeHtml(b.bookedBy)}</td>
+              <td data-label="Booker" dir="auto">${escapeHtml(b.bookedBy)}</td>
               <td class="num" data-label="Nights">${b.nights}</td>
               <td class="num" data-label="Revenue">${formatIDR(b.revenue)}</td>
               <td class="num" data-label="Commission (9%)">${formatIDR(b.commission)}</td>
-              <td class="num text-muted" data-label="Guard Cut (1%)">${formatIDR(b.guardCut)}</td>
+              <td class="num text-muted" data-label="Area Guard (1%)">${formatIDR(b.areaGuard)}</td>
+              <td class="num text-muted" data-label="Villa Guard (50K)">${formatIDR(b.villaGuard)}</td>
+              <td class="summary-details-cell" data-label="Details">
+                <button type="button" class="btn btn-sm btn-secondary summary-details-btn"
+                        data-details-index="${idx}" aria-expanded="${isOpen}" aria-controls="summary-guest-row-${idx}">
+                  ${isOpen ? 'Hide Details' : 'More Details'}
+                </button>
+              </td>
+            </tr>
+            <tr class="summary-guest-detail-row" id="summary-guest-row-${idx}"${isOpen ? '' : ' hidden'}>
+              <td class="summary-guest-detail-cell" colspan="7">${renderGuestDetail(b)}</td>
+            </tr>`;
+            })
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/** The per-guest breakdown behind one booker's row: who actually stayed the
+ * nights that booker is credited with, and the 9% each of those guests
+ * generated. Nights whose dates no saved invoice covers are grouped into a
+ * single, clearly-labelled row rather than being dropped — the nights and
+ * commission here always add back up to the booker's own row above. */
+function renderGuestDetail(booker) {
+  if (!booker.guests.length) {
+    return `<div class="summary-guest-empty">No guest detail available for this booker.</div>`;
+  }
+
+  return `
+    <div class="summary-guest-detail">
+      <div class="summary-guest-detail-title">Guests booked by <strong dir="auto">${escapeHtml(booker.bookedBy)}</strong></div>
+      <table class="data-table stacked-table summary-guest-table">
+        <thead>
+          <tr><th>Guest</th><th>Nights</th><th>Revenue</th><th>Commission (9%)</th></tr>
+        </thead>
+        <tbody>
+          ${booker.guests
+            .map(
+              (g) => `
+            <tr>
+              <td data-label="Guest">${renderGuestName(g)}</td>
+              <td class="num" data-label="Nights">${g.nights}</td>
+              <td class="num" data-label="Revenue">${formatIDR(g.revenue)}</td>
+              <td class="num" data-label="Commission (9%)">${formatIDR(g.commission)}</td>
             </tr>`
             )
             .join('')}
@@ -240,6 +379,46 @@ function renderBookerTable(byBooker) {
       </table>
     </div>
   `;
+}
+
+/**
+ * dir="auto" so an Arabic guest name sitting next to a Latin invoice number
+ * lays out in its own direction instead of the two being reordered into each
+ * other.
+ *
+ * The name and its invoice number(s) are wrapped in one element rather than
+ * left as two siblings: on mobile the containing <td> is a flex row (see
+ * .stacked-table td), so two siblings would be laid out as two separate
+ * columns alongside the label instead of the number sitting under the name.
+ */
+function renderGuestName(guest) {
+  if (!guest.guestName) {
+    return `<span class="summary-guest-unmatched">No matching invoice</span>`;
+  }
+  const invoices = guest.invoiceNumbers.length
+    ? `<span class="summary-guest-invoice">${escapeHtml(guest.invoiceNumbers.join(', '))}</span>`
+    : '';
+  return `<span class="summary-guest-name-cell"><span class="summary-guest-name" dir="auto">${escapeHtml(guest.guestName)}</span>${invoices}</span>`;
+}
+
+/** Toggles a booker's detail row in place rather than re-rendering the whole
+ * table — nothing about the data changed, only what's shown. */
+function bindBookerTableEvents(host, byBooker) {
+  host.querySelectorAll('.summary-details-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.detailsIndex);
+      const booker = byBooker[idx];
+      const row = host.querySelector(`#summary-guest-row-${idx}`);
+      if (!booker || !row) return;
+
+      const willOpen = row.hidden;
+      row.hidden = !willOpen;
+      btn.textContent = willOpen ? 'Hide Details' : 'More Details';
+      btn.setAttribute('aria-expanded', String(willOpen));
+      if (willOpen) state.expandedBookers.add(booker.bookedBy);
+      else state.expandedBookers.delete(booker.bookedBy);
+    });
+  });
 }
 
 function renderMonthTable(byMonth) {
@@ -250,7 +429,7 @@ function renderMonthTable(byMonth) {
     <div class="table-wrap">
       <table class="data-table stacked-table" id="summary-month-table">
         <thead>
-          <tr><th>Month</th><th>Nights</th><th>Revenue</th></tr>
+          <tr><th>Month</th><th>Nights</th><th>Total Revenue</th><th>Net Revenue</th></tr>
         </thead>
         <tbody>
           ${byMonth
@@ -259,12 +438,14 @@ function renderMonthTable(byMonth) {
             <tr>
               <td data-label="Month">${escapeHtml(monthKeyLabel(m.month))}</td>
               <td class="num" data-label="Nights">${m.nights}</td>
-              <td class="num" data-label="Revenue">${formatIDR(m.revenue)}</td>
+              <td class="num" data-label="Total Revenue">${formatIDR(m.revenue)}</td>
+              <td class="num summary-net-revenue" data-label="Net Revenue">${formatIDR(m.netRevenue)}</td>
             </tr>`
             )
             .join('')}
         </tbody>
       </table>
+      <div class="summary-net-hint">Net Revenue = Total Revenue − Commission (9%) − Area Guard (1%) − Villa Guard (50K × nights).</div>
     </div>
   `;
 }
@@ -279,6 +460,7 @@ function render() {
 
   els.refreshBtn.disabled = state.loading;
   els.refreshBtn.classList.toggle('is-loading', state.loading);
+  els.statementBtn.disabled = state.loading || state.downloading || !state.data?.totalNights;
 
   if (state.loading) {
     const skeleton = `<div class="skeleton" style="height:36px;margin-bottom:8px;"></div><div class="skeleton" style="height:36px;"></div>`;
@@ -303,15 +485,33 @@ function render() {
     return;
   }
 
-  const { byBooker, byMonth, totalNights, totalRevenue, totalCommission, totalGuardCut, missingPriceNights, missingPriceDates } = state.data;
+  const {
+    byBooker,
+    byMonth,
+    totalNights,
+    totalRevenue,
+    totalCommission,
+    totalAreaGuard,
+    totalVillaGuard,
+    missingPriceNights,
+    missingPriceDates
+  } = state.data;
 
   els.totalNights.textContent = String(totalNights);
   els.totalRevenue.textContent = formatIDR(totalRevenue);
   els.totalCommission.textContent = formatIDR(totalCommission);
-  // Deliberately a small note, not its own stat box — the 1% guard cut is
+  // Deliberately a small note, not their own stat boxes — both guard cuts are
   // secondary info next to nights/revenue/commission, per the villa owner's
-  // own framing of it as "doesn't matter that much".
-  els.guardCutNote.textContent = `Villa guard's cut (1%): ${formatIDR(totalGuardCut)}`;
+  // own framing of them. Both are shown here because they're the two figures
+  // the By Month table's Net Revenue column is computed from, and there'd
+  // otherwise be nowhere on the page to check that subtraction against. One
+  // per line rather than run together on one: they're two unrelated cuts on
+  // two different bases (a % of revenue vs. a flat rate per night), so
+  // reading them stacked is quicker than picking them apart from one string.
+  els.guardCutNote.innerHTML = `
+    <div class="summary-guard-line">Area guard (1%): ${formatIDR(totalAreaGuard)}</div>
+    <div class="summary-guard-line">Villa guard (50K × ${totalNights} night${totalNights === 1 ? '' : 's'}): ${formatIDR(totalVillaGuard)}</div>
+  `;
 
   if (totalNights === 0) {
     // Distinct from the pricing-mismatch warning below — this is a plain
@@ -332,6 +532,7 @@ function render() {
   }
 
   els.byBookerHost.innerHTML = renderBookerTable(byBooker);
+  bindBookerTableEvents(els.byBookerHost, byBooker);
   els.byMonthHost.innerHTML = renderMonthTable(byMonth);
 }
 
@@ -360,6 +561,13 @@ function escapeHtml(value) {
 function template() {
   return `
     <div class="page">
+      <div class="page-actions">
+        <button class="btn btn-primary" id="btn-download-statement" type="button" disabled>
+          <span class="spinner"></span>
+          <span class="btn-label">Download Statement PDF</span>
+        </button>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <h2>Filter by Date</h2>

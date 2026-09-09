@@ -12,6 +12,7 @@ minimal clicks, maximum automation.
 | Invoice | فاتورة | Create guest invoices with automatic pricing, export vector-quality PDFs, and browse/restore past revisions. |
 | Prices | اسعار | Manage seasonal nightly rates used automatically by the Invoice tab. |
 | Availability | توافرات | A calendar of booking status per date, with past dates automatically marked Passed. |
+| Summary | ملخص | Nights, revenue and payout splits for any date range — per booker (with a per-guest breakdown), per month, and as a downloadable statement PDF. |
 
 It's a plain HTML/CSS/JavaScript static site — no framework, no bundler, no
 build step. Third-party libraries (Supabase JS, jsPDF, jsPDF-AutoTable) are
@@ -85,7 +86,7 @@ identically if you ever move off GitHub Pages.
 │   │   ├── availabilityService.js   Calendar status CRUD (incl. bulk status updates)
 │   │   ├── settingsService.js       Staff-editable option lists (Guest By, Booked By)
 │   │   ├── linkedStayService.js     "Must be booked together" date-group CRUD
-│   │   └── summaryService.js        Booking summary aggregation (by booker / by month)
+│   │   └── summaryService.js        Booking summary aggregation (by booker / by month / per guest)
 │   ├── components/                 One file per UI feature, each exporting mount(container)
 │   │   ├── invoiceTab.js
 │   │   ├── pricesTab.js
@@ -103,7 +104,9 @@ identically if you ever move off GitHub Pages.
 │       ├── format.js                IDR currency formatting
 │       ├── validators.js            Form field validation
 │       ├── dbErrors.js              Friendly messages for Postgres error codes
+│       ├── pdfCommon.js             Shared jsPDF plumbing: document factory, page/colour constants, canvas-rendered Arabic
 │       ├── pdfGenerator.js          Builds the invoice PDF (jsPDF vector text + canvas-rendered Arabic)
+│       ├── statementGenerator.js    Builds the Summary tab's statement PDF for the range on screen
 │       └── arabicReshaper.js        containsArabic() — routes Arabic strings to canvas rendering
 │
 ├── assets/

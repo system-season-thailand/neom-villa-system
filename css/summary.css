@@ -48,11 +48,17 @@
   margin-top: 4px;
 }
 
-/* Deliberately plain text, not another stat box — the villa guard's 1% cut
-   is minor/secondary info next to nights, revenue, and commission above. */
+/* Deliberately plain text, not their own stat boxes — both guard cuts are
+   minor/secondary info next to nights, revenue, and commission above. One
+   cut per line: they're computed off different bases (a % of revenue vs. a
+   flat rate per night), so stacking them reads quicker than one run-on line. */
 .summary-guard-note {
   font-size: 12px;
   margin: -8px 0 18px;
+}
+
+.summary-guard-line + .summary-guard-line {
+  margin-top: 2px;
 }
 
 @media (max-width: 640px) {
@@ -75,27 +81,162 @@
 
 /* Desktop-only column alignment, matching between the By Booker and By
    Month tables — the first column (Booker / Month) stays left, the numeric
-   columns after it (Nights/Revenue/Commission, or just Nights/Revenue for
-   By Month) are centered for easier scanning, and the By Booker table's
-   trailing Guard Cut column sits at the left since it's secondary info, not
-   part of that visual grouping. Scoped above the .stacked-table breakpoint
-   on purpose: the mobile stacked-card layout already reads well as-is and
-   isn't touched. */
+   columns after it are centered for easier scanning, and the By Booker
+   table's trailing Area Guard / Villa Guard columns sit at the left since
+   they're secondary info, not part of that visual grouping. Scoped above the
+   .stacked-table breakpoint on purpose: the mobile stacked-card layout
+   already reads well as-is and isn't touched.
+
+   Every selector here is written against direct children (> thead > tr > th)
+   rather than plain descendants: the By Booker table now nests a whole
+   second table inside its guest-detail rows, and a bare
+   "#summary-booker-table td:nth-child(3)" would reach into that nested
+   table's cells too and re-align columns that have nothing to do with these. */
 @media (min-width: 641px) {
-  #summary-booker-table th:nth-child(2),
-  #summary-booker-table th:nth-child(3),
-  #summary-booker-table th:nth-child(4),
-  #summary-booker-table td:nth-child(2),
-  #summary-booker-table td:nth-child(3),
-  #summary-booker-table td:nth-child(4),
-  #summary-month-table th:nth-child(2),
-  #summary-month-table th:nth-child(3),
-  #summary-month-table td:nth-child(2),
-  #summary-month-table td:nth-child(3) {
+  #summary-booker-table > thead > tr > th:nth-child(2),
+  #summary-booker-table > thead > tr > th:nth-child(3),
+  #summary-booker-table > thead > tr > th:nth-child(4),
+  #summary-booker-table > tbody > tr > td:nth-child(2),
+  #summary-booker-table > tbody > tr > td:nth-child(3),
+  #summary-booker-table > tbody > tr > td:nth-child(4),
+  #summary-month-table > thead > tr > th:nth-child(2),
+  #summary-month-table > thead > tr > th:nth-child(3),
+  #summary-month-table > thead > tr > th:nth-child(4),
+  #summary-month-table > tbody > tr > td:nth-child(2),
+  #summary-month-table > tbody > tr > td:nth-child(3),
+  #summary-month-table > tbody > tr > td:nth-child(4) {
     text-align: center;
   }
-  #summary-booker-table th:nth-child(5),
-  #summary-booker-table td:nth-child(5) {
+  #summary-booker-table > thead > tr > th:nth-child(5),
+  #summary-booker-table > thead > tr > th:nth-child(6),
+  #summary-booker-table > tbody > tr > td:nth-child(5),
+  #summary-booker-table > tbody > tr > td:nth-child(6) {
     text-align: left;
+  }
+  #summary-booker-table > tbody > tr > td.summary-details-cell {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  /* The nested guest table gets the same treatment on its own terms: name
+     left, the three numeric columns centered. */
+  .summary-guest-table th:nth-child(2),
+  .summary-guest-table th:nth-child(3),
+  .summary-guest-table th:nth-child(4),
+  .summary-guest-table td:nth-child(2),
+  .summary-guest-table td:nth-child(3),
+  .summary-guest-table td:nth-child(4) {
+    text-align: center;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* By Booker → "More Details": the per-guest breakdown row                  */
+/* ---------------------------------------------------------------------- */
+
+/* Load-bearing, not defensive. The mobile stacked-card layout sets
+   `display: block` on every .stacked-table tr, which would otherwise beat
+   the UA stylesheet's `[hidden] { display: none }` and leave every collapsed
+   detail row permanently visible on a phone. */
+.summary-guest-detail-row[hidden] {
+  display: none !important;
+}
+
+.summary-guest-detail-cell {
+  padding: 0 0 12px !important;
+  background: var(--surface-1);
+}
+
+.summary-guest-detail {
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-1);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.summary-guest-detail-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.summary-guest-table {
+  background: var(--surface-0);
+}
+
+/* Keeps the guest name and its invoice number(s) as a single flex item on
+   mobile, where the containing cell is a flex row — see renderGuestName(). */
+.summary-guest-name-cell {
+  display: block;
+}
+
+.summary-guest-name {
+  font-weight: 600;
+}
+
+/* The invoice number(s) the guest's nights were matched against — shown
+   small and secondary next to the name, since it's provenance for the
+   figures rather than something staff read the row for. */
+.summary-guest-invoice {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Booked nights no saved invoice covers. Amber rather than red: it's an
+   attribution gap to follow up on, not an error — the nights and money are
+   still counted in every total. */
+.summary-guest-unmatched {
+  font-style: italic;
+  color: var(--warning);
+}
+
+.summary-guest-empty {
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.summary-net-revenue {
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
+.summary-net-hint {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  /* Undo the stacked-card treatment for the detail row itself — the nested
+     guest table inside it becomes its own set of cards, so wrapping those in
+     a second bordered card would just be a box inside a box. The selectors
+     carry an extra class over .stacked-table td's own so they win outright
+     rather than relying on source order. */
+  .stacked-table tbody tr.summary-guest-detail-row {
+    border: none;
+    padding: 0;
+    margin-bottom: 8px;
+  }
+  .stacked-table td.summary-guest-detail-cell {
+    display: block;
+    padding: 0 !important;
+    text-align: left;
+  }
+  .stacked-table td.summary-guest-detail-cell::before {
+    content: none;
+  }
+  .summary-details-cell {
+    padding-top: 8px !important;
+  }
+  .summary-details-cell .btn {
+    width: 100%;
+  }
+  .summary-guest-detail {
+    padding: 10px;
   }
 }

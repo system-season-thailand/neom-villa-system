@@ -267,12 +267,15 @@ Given a check-in date and a night count, `calculateStayPricing()` in
 ## Booking summary (ملخص tab)
 
 `getBookingSummary(startISO, endISO)` in `js/services/summaryService.js`
-powers the Summary tab entirely with two read-only queries, run in parallel:
+powers the Summary tab entirely with three read-only queries, run in parallel:
 
 1. Every `neom_availability` row with `status = 'booked'` inside the
    selected range (i.e. a real, sparse row — never the app's synthesized
    "available"/"passed" defaults, which never carry a `booked_by`).
 2. Every `neom_price` row overlapping the same range.
+3. Every `neom_pdf` row whose stay overlaps the same range — for the
+   per-guest breakdown only (see "Per-guest breakdown" below); none of the
+   nights, revenue or commission figures depend on it.
 
 For each booked date, the matching `neom_price` rule (if any — pricing
 ranges never overlap, so at most one can match) gives that night's revenue;
@@ -290,18 +293,73 @@ actual dates) in the result let the UI name exactly which night(s) to add a
 pricing rule for, rather than silently understating totals or leaving staff
 to guess which date is the gap.
 
-Each booker's row also carries `commission` and `guardCut` —
-`BOOKER_COMMISSION_RATE` (9%) and `GUARD_COMMISSION_RATE` (1%) of *that
-booker's own* revenue, per the villa's actual payout split for every booked
-night. Since both are flat percentages of revenue, summing each booker's
-`guardCut` is equivalent to `totalRevenue * GUARD_COMMISSION_RATE` — the tab
-shows the latter as `totalGuardCut`, a single figure covering every booker at
-once, deliberately presented as minor/secondary info next to nights/revenue/
-commission (a flat 1% "for reference" line, not its own stat box) since it's
-one fixed cut rather than a per-booker concern the way commission is.
+### The three cuts
+
+Every booked night carries three deductions, and the distinction between
+them is the whole reason the tab's money columns look the way they do:
+
+| Cut | Constant | Basis | Where it's deducted |
+|---|---|---|---|
+| Booker commission | `BOOKER_COMMISSION_RATE` (9%) | that booker's own revenue | per booker, and in the month's net |
+| Area guard | `AREA_GUARD_RATE` (1%) | that booker's own revenue | per booker, and in the month's net |
+| Villa guard | `VILLA_GUARD_PER_NIGHT` (50,000 IDR) | **nights, not revenue** | **month's net only** |
+
+The first two are flat percentages of revenue, so summing each booker's own
+figure is equivalent to computing it once off `totalRevenue` — which is what
+`totalCommission`/`totalAreaGuard` do. (`AREA_GUARD_RATE` was called
+`GUARD_COMMISSION_RATE` before there were two different guards to tell
+apart.)
+
+The villa guard is the odd one out on purpose. It's a flat per-night fee
+that doesn't scale with what the night sold for, and it deliberately does
+**not** reduce a booker's revenue, commission, or the area guard's 1% — it's
+shown in the By Booker table as information only. It is subtracted exactly
+once, at the month level, which is what makes `byMonth[].netRevenue`
+meaningful:
+
+```
+netRevenue = revenue − (revenue × 9%) − (revenue × 1%) − (nights × 50,000)
+```
+
+`byMonth[].revenue` stays **gross** (the same figure the per-booker rows sum
+to) so that subtraction never double-counts. Both guard totals are surfaced
+on the tab as a single secondary note line rather than their own stat boxes
+— they're minor next to nights/revenue/commission, but they're also the two
+numbers the Net Revenue column is computed from, so there'd otherwise be
+nowhere on the page to check the arithmetic against.
+
+### Per-guest breakdown (the "More Details" expansion)
+
+Each `byBooker` row also carries `guests` — who actually stayed the nights
+that booker is credited with. There is no foreign key to follow here:
+`neom_availability` has no guest name, and marking a date Booked doesn't
+create an invoice (nor the reverse — see `FUTURE_IMPROVEMENTS.md` →
+"Auto-sync from bookings"). So `getBookingSummary()` also fetches every
+`neom_pdf` row whose stay overlaps the range and attributes each booked
+night to the invoice whose stay covers that date — check-in inclusive,
+check-out exclusive, since the checkout day isn't a night. Only the latest
+revision per invoice number is considered, since that's the version whose
+dates and guest name currently stand.
+
+Nothing prevents two invoices covering the same night (a stay re-issued
+under a new number), so when several match: prefer one whose own `guestBy`
+is the very staff member the night is credited to, then fall back to the
+most recently created. A night that no invoice covers is **not** dropped or
+guessed at — it collects in a single `guestName: null` bucket the UI labels
+"No matching invoice", so each booker's per-guest nights and commission
+always add back up to that booker's own row.
+
+Reading invoices is deliberately non-fatal: if that one query fails, the
+tab still reports every night, revenue and commission figure correctly and
+only the per-guest detail comes up empty.
 
 This is a read-only report — it has no write path of its own, and doesn't
-change how `neom_availability`/`neom_price` are used anywhere else.
+change how `neom_availability`/`neom_price`/`neom_pdf` are used anywhere
+else. The whole result also feeds the tab's **Download Statement PDF**
+button, which renders the range currently on screen — totals, By Booker, the
+per-guest detail, and By Month — via `js/utils/statementGenerator.js`,
+built from the same already-fetched data so the document can never disagree
+with the tables it came from.
 
 ## Row Level Security
 

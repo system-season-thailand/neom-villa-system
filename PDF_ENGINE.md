@@ -12,7 +12,17 @@ text, not pixels. The one deliberate exception is Arabic text — see below —
 which *is* rendered via canvas, for reasons that took real investigation to
 land on.
 
-All of this happens in [`js/utils/pdfGenerator.js`](js/utils/pdfGenerator.js).
+The app produces **two** PDFs, both on this same engine:
+
+- the guest **invoice** — [`js/utils/pdfGenerator.js`](js/utils/pdfGenerator.js)
+- the Summary tab's **statement** — [`js/utils/statementGenerator.js`](js/utils/statementGenerator.js)
+
+Everything they share — the document factory, page geometry, colours, and
+the whole Arabic-via-canvas path below — lives in
+[`js/utils/pdfCommon.js`](js/utils/pdfCommon.js). That split exists for one
+concrete reason: the Arabic handling is subtle enough (see below) that
+duplicating it would eventually mean an Arabic guest name rendering
+correctly on an invoice and incorrectly on a statement.
 
 ## Generation workflow
 
@@ -74,13 +84,14 @@ ordinary DOM text (HarfBuzz, DirectWrite, or CoreText depending on OS), so
 it shapes Arabic correctly by construction — the exact same engine that
 already renders the "عميل خاص" option in the Guest By dropdown correctly in
 the app's own UI.
-`renderArabicToImage()` in `pdfGenerator.js` draws a given Arabic string to
+`renderArabicToImage()` in `pdfCommon.js` draws a given Arabic string to
 an offscreen canvas at 6× the target size (roughly 300+ effective DPI at
 normal invoice text sizes) using the **Tajawal** web font — already loaded
 by `index.html` for the app's own Arabic UI text — and returns a PNG data
 URL sized in PDF millimeters, ready for `doc.addImage()`. `drawText()` and
-the `didParseCell`/`didDrawCell` autoTable hooks route Arabic strings
-through this instead of `doc.text()`; everything else on the invoice is
+the `didParseCell`/`didDrawCell` autoTable hooks returned by
+`arabicTableHooks()` route Arabic strings through this instead of
+`doc.text()`; everything else on the invoice — and on the statement — is
 still pure vector.
 
 **Trade-off, stated plainly:** the Arabic guest name (or an Arabic season
@@ -150,10 +161,48 @@ computed locally inside `generateInvoicePdf()` and used for both the footer
 line and the filename, so that:
 
 - The first PDF ever downloaded for an invoice number (`revisionNumber: 1`)
-  reads **"Revision 0"** on the page, and its filename has no `-revN` suffix
-  at all: `INV-2026-0133.pdf`.
+  reads **"Revision 0"** in the footer, and its filename carries no `Rev`
+  suffix at all: `ALZOBIDI MOSLEH FAYEZ INV-N-VII-26-0133.pdf`.
 - The next download of that same invoice number (`revisionNumber: 2`) reads
-  **"Revision 1"**, filename `INV-2026-0133-rev1.pdf`, and so on.
+  **"Revision 1"**, filename `… INV-N-VII-26-0133 Rev1.pdf`, and so on.
+
+(The `INV-N-<roman month>-<yy>-<seq>` form shown on the page and in the file
+name is built by `buildDisplayInvoiceNumber()` from *today's* month/year plus
+the stored number's trailing sequence — see its doc comment for why
+re-downloading an old invoice next month deliberately produces a different
+one.)
 
 This only changes what staff and guests *see* on the file — the database's
 own revision numbering, and every in-app list that reads it, is untouched.
+
+## The Summary statement
+
+`generateSummaryStatementPdf({ from, to, rangeLabel, data })` in
+[`js/utils/statementGenerator.js`](js/utils/statementGenerator.js) renders
+the ملخص (Summary) tab's current view as a single document: the six headline
+figures, the By Booker table, each booker's own per-guest detail (the same
+data behind the tab's "More Details" expansions), and the By Month
+gross/net table.
+
+Two things about it are deliberate:
+
+- **It takes data, not a date range.** `data` is the exact
+  `getBookingSummary()` result the tab already fetched and is displaying, so
+  generating a statement runs no additional query and the document can never
+  disagree with the tables it was generated from. Same purity as
+  `generateInvoicePdf()` — data in, `Blob` out, no Supabase.
+- **Nothing is stored.** Like invoices, statements are regenerated on demand
+  rather than kept as files (see `DATABASE.md` → "Why no Storage bucket"),
+  and a statement has even less reason to be stored: it's a view of live
+  booking data, not a record issued to a guest.
+
+The file name is the range itself — `NEOM VILLA STATEMENT 1 SEP 2026 - 30
+SEP 2026.pdf` — since there's no statement number to key off.
+
+Page breaks are handled two ways: `autoTable` splits a long table across
+pages by itself (repeating its header row), while the fixed-height pieces
+around the tables — section titles and each booker's own heading — go
+through `ensureSpace()`, so a heading is never stranded alone at the foot of
+a page. Page footers are drawn last, once every section is laid out, so
+"Page 1 of N" reports the real final count rather than a guess made while
+still drawing.
