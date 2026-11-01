@@ -1,5 +1,6 @@
 import { supabaseClient } from '../config/supabase.js';
 import { friendlyDbError } from '../utils/dbErrors.js';
+import { addDays } from '../utils/dateUtils.js';
 
 const AVAILABILITY_TABLE = 'neom_availability';
 const PRICE_TABLE = 'neom_price';
@@ -88,7 +89,7 @@ export async function getBookingSummary(startISO, endISO) {
   // of the numbers, so if invoices can't be read the tab still reports every
   // night, revenue and commission figure correctly — each booker's "More
   // Details" just has nothing to show.
-  const stays = invoiceErr ? [] : latestRevisionStays(invoiceRows || []);
+  const stays = invoiceErr ? [] : await buildStays(invoiceRows || []);
 
   const priceRules = (priceRows || []).map((r) => ({
     startDate: r.start_date,
@@ -110,6 +111,11 @@ export async function getBookingSummary(startISO, endISO) {
   let missingPriceNights = 0;
   const missingPriceDates = [];
 
+  // Every booked night keyed by its own date, for buildTimeline() below —
+  // the per-booker aggregation above collapses dates away, but the report
+  // needs to walk the period night by night.
+  const nightsByDate = new Map();
+
   for (const row of bookedRows || []) {
     const bookedBy = (row.booked_by || '').trim();
     const rate = rateForDate(row.date);
@@ -119,10 +125,13 @@ export async function getBookingSummary(startISO, endISO) {
       missingPriceDates.push(row.date);
     }
 
+    const stay = findStayForNight(stays, row.date, bookedBy);
+    nightsByDate.set(row.date, { bookedBy, stay });
+
     const bookerEntry = byBookerMap.get(bookedBy) || { bookedBy, nights: 0, revenue: 0, guestMap: new Map() };
     bookerEntry.nights += 1;
     bookerEntry.revenue += revenue;
-    accumulateGuestNight(bookerEntry.guestMap, findStayForNight(stays, row.date, bookedBy), revenue);
+    accumulateGuestNight(bookerEntry.guestMap, stay, revenue);
     byBookerMap.set(bookedBy, bookerEntry);
 
     const monthKey = row.date.slice(0, 7); // 'YYYY-MM'
@@ -160,6 +169,25 @@ export async function getBookingSummary(startISO, endISO) {
     })
     .sort((a, b) => a.month.localeCompare(b.month));
 
+  const timeline = buildTimeline(startISO, endISO, nightsByDate);
+  const emptyNights = timeline.reduce((sum, r) => sum + (r.kind === 'empty' ? r.nights : 0), 0);
+
+  // What the unbooked nights would have been worth at their own nightly
+  // rates — revenue *not* earned, never to be added to totalRevenue. An
+  // unbooked night with no pricing rule can't be valued at all, so it
+  // contributes nothing and is counted separately, the same way an unpriced
+  // booked night is: better to under-report and say so than to guess a rate.
+  let emptyNightsValue = 0;
+  let emptyMissingPriceNights = 0;
+  for (const row of timeline) {
+    if (row.kind !== 'empty') continue;
+    for (let date = row.start; date < row.end; date = addDays(date, 1)) {
+      const rate = rateForDate(date);
+      if (rate == null) emptyMissingPriceNights += 1;
+      else emptyNightsValue += rate;
+    }
+  }
+
   const totalCommission = totalRevenue * BOOKER_COMMISSION_RATE;
   const totalAreaGuard = totalRevenue * AREA_GUARD_RATE;
   const totalVillaGuard = totalNights * VILLA_GUARD_PER_NIGHT;
@@ -167,6 +195,10 @@ export async function getBookingSummary(startISO, endISO) {
   return {
     byBooker,
     byMonth,
+    timeline,
+    emptyNights,
+    emptyNightsValue,
+    emptyMissingPriceNights,
     totalNights,
     totalRevenue,
     totalCommission,
@@ -179,30 +211,159 @@ export async function getBookingSummary(startISO, endISO) {
 }
 
 /**
- * Collapses raw neom_pdf rows to one stay per invoice number — the latest
- * revision, since that's the version whose dates and guest name currently
- * stand (earlier revisions may have been corrected). Rows with an incomplete
- * date pair are dropped: they can't cover a night either way.
+ * Walks the selected period night by night and turns it into one flat,
+ * chronological list in which **every date belongs to exactly one row** —
+ * the shape the report PDF prints.
+ *
+ * Three kinds of row come out of it:
+ *
+ * - `stay` — consecutive booked nights covered by the same invoice. The
+ *   dates reported are the *invoice's* own check-in/check-out, not the run's
+ *   bounds, so a stay running past either end of the period is still shown
+ *   as the guest was actually billed for it. Emitted once per invoice even
+ *   in the unlikely case its nights aren't contiguous.
+ * - `unattributed` — consecutive booked nights by the same booker that no
+ *   invoice covers. These are genuinely booked, so they must not be reported
+ *   as empty; they simply have no guest, dates or payment of their own, so
+ *   the run's own bounds stand in.
+ * - `empty` — consecutive nights with no booking at all.
+ *
+ * Run bounds use the same checkout-exclusive convention as a stay: `end` is
+ * the morning after the last night in the run. That's what makes the rows
+ * tile — one row's `end` is the next row's `start` — so a reader can follow
+ * the period straight down the table without arithmetic. (It also means a
+ * run ending on the last night of the period reports an `end` one day into
+ * the next month, which is correct: that's the morning the villa is free.)
  */
-function latestRevisionStays(rows) {
+function buildTimeline(startISO, endISO, nightsByDate) {
+  const rows = [];
+  const seenInvoices = new Set();
+
+  // What makes two adjacent nights part of the same run: the same invoice,
+  // or the same booker with no invoice, or both being empty.
+  const runKey = (dateISO) => {
+    const night = nightsByDate.get(dateISO);
+    if (!night) return 'empty';
+    return night.stay ? `invoice:${night.stay.invoiceNumber}` : `booker:${night.bookedBy}`;
+  };
+
+  let cursor = startISO;
+  while (cursor <= endISO) {
+    const key = runKey(cursor);
+    const runStart = cursor;
+    let nights = 0;
+    while (cursor <= endISO && runKey(cursor) === key) {
+      nights += 1;
+      cursor = addDays(cursor, 1);
+    }
+    const runEnd = cursor; // the morning after the run's last night
+
+    if (key === 'empty') {
+      rows.push({ kind: 'empty', start: runStart, end: runEnd, nights, sortDate: runStart });
+      continue;
+    }
+
+    const night = nightsByDate.get(runStart);
+    if (!night.stay) {
+      rows.push({
+        kind: 'unattributed',
+        bookedBy: night.bookedBy,
+        start: runStart,
+        end: runEnd,
+        nights,
+        sortDate: runStart
+      });
+      continue;
+    }
+
+    if (seenInvoices.has(night.stay.invoiceNumber)) continue;
+    seenInvoices.add(night.stay.invoiceNumber);
+    rows.push({
+      kind: 'stay',
+      bookedBy: night.bookedBy,
+      guestName: night.stay.guestName,
+      invoiceNumber: night.stay.invoiceNumber,
+      start: night.stay.checkIn,
+      end: night.stay.checkOut,
+      nights: night.stay.stayNights ?? nights,
+      totalPayment: night.stay.totalPayment,
+      confirmedAt: night.stay.confirmedAt,
+      sortDate: night.stay.checkIn
+    });
+  }
+
+  // Walking the period already produces near-order; this only matters for a
+  // stay whose invoiced check-in precedes the period (and so precedes the
+  // run that surfaced it).
+  return rows.sort((a, b) => a.sortDate.localeCompare(b.sortDate));
+}
+
+/**
+ * Collapses raw neom_pdf rows into one stay per invoice number, carrying
+ * everything the report prints about a guest.
+ *
+ * Two different revisions matter here, for two different reasons:
+ *
+ * - **The latest** supplies the guest name, dates, nights and total, since
+ *   that's the version whose figures currently stand (earlier ones may have
+ *   been corrected).
+ * - **The first** supplies `confirmedAt` — the booking was confirmed when it
+ *   was first invoiced, not when someone later fixed a typo in it.
+ *
+ * Revision 1 is fetched separately rather than picked out of `rows`, because
+ * `rows` is filtered by the stay dates of each revision: if a correction
+ * moved a stay into this range from outside it, revision 1 wouldn't be in
+ * `rows` at all. If that lookup fails or finds nothing, this falls back to
+ * the earliest revision that *was* fetched.
+ */
+async function buildStays(rows) {
   const latestByNumber = new Map();
+  const earliestByNumber = new Map();
   for (const row of rows) {
-    const current = latestByNumber.get(row.invoice_number);
-    if (!current || row.revision_number > current.revision_number) {
+    const latest = latestByNumber.get(row.invoice_number);
+    if (!latest || row.revision_number > latest.revision_number) {
       latestByNumber.set(row.invoice_number, row);
+    }
+    const earliest = earliestByNumber.get(row.invoice_number);
+    if (!earliest || row.revision_number < earliest.revision_number) {
+      earliestByNumber.set(row.invoice_number, row);
     }
   }
 
+  const firstRevisionDates = await fetchFirstRevisionDates(Array.from(latestByNumber.keys()));
+
   return Array.from(latestByNumber.values())
-    .map((row) => ({
-      invoiceNumber: row.invoice_number,
-      guestName: (row.invoice_data?.guestName || '').trim(),
-      guestBy: (row.invoice_data?.guestBy || '').trim(),
-      checkIn: row.invoice_data?.checkInDate || '',
-      checkOut: row.invoice_data?.checkOutDate || '',
-      createdAt: row.created_at || ''
-    }))
+    .map((row) => {
+      const d = row.invoice_data || {};
+      return {
+        invoiceNumber: row.invoice_number,
+        guestName: (d.guestName || '').trim(),
+        guestBy: (d.guestBy || '').trim(),
+        checkIn: d.checkInDate || '',
+        checkOut: d.checkOutDate || '',
+        stayNights: Number(d.nights) || null,
+        totalPayment: Number(d.total) || 0,
+        createdAt: row.created_at || '',
+        confirmedAt:
+          firstRevisionDates.get(row.invoice_number) ||
+          earliestByNumber.get(row.invoice_number)?.created_at ||
+          null
+      };
+    })
     .filter((stay) => stay.checkIn && stay.checkOut && stay.guestName);
+}
+
+/** When each of these invoices was first raised. Non-fatal on failure — the
+ * caller falls back to the earliest revision it already has. */
+async function fetchFirstRevisionDates(invoiceNumbers) {
+  if (!invoiceNumbers.length) return new Map();
+  const { data, error } = await supabaseClient
+    .from(INVOICE_TABLE)
+    .select('invoice_number, created_at')
+    .eq('revision_number', 1)
+    .in('invoice_number', invoiceNumbers);
+  if (error) return new Map();
+  return new Map((data || []).map((r) => [r.invoice_number, r.created_at]));
 }
 
 /**
@@ -230,28 +391,50 @@ function findStayForNight(stays, dateISO, bookedBy) {
   return pool.reduce((latest, s) => (s.createdAt > latest.createdAt ? s : latest));
 }
 
-/** Adds one night's nights/revenue onto its guest's running entry, keyed by
- * guest name so a guest who stayed twice in the range reads as one row (with
- * both invoice numbers listed) rather than two look-alike ones. */
+/**
+ * Adds one booked night onto its stay's running entry, keyed by invoice
+ * number rather than guest name: a row now carries one stay's own check-in,
+ * check-out and total, so a guest who stayed twice in the range has to read
+ * as two rows — merging them would leave one date pair standing for two
+ * different stays.
+ *
+ * Each entry ends up carrying two different night counts, deliberately:
+ * `nights` is how many booked calendar nights inside the selected range were
+ * attributed here (what the Summary tab's revenue and commission are
+ * computed from), while `stayNights` is the invoice's own figure for the
+ * whole stay — which is what belongs next to a check-in and check-out date,
+ * even when part of that stay falls outside the range being reported on.
+ */
 function accumulateGuestNight(guestMap, stay, revenue) {
-  const key = stay ? stay.guestName : UNATTRIBUTED_GUEST;
-  const entry = guestMap.get(key) || { guestName: key, invoiceNumbers: [], nights: 0, revenue: 0 };
+  const key = stay ? stay.invoiceNumber : UNATTRIBUTED_GUEST;
+  let entry = guestMap.get(key);
+  if (!entry) {
+    entry = {
+      guestName: stay ? stay.guestName : UNATTRIBUTED_GUEST,
+      invoiceNumber: stay ? stay.invoiceNumber : null,
+      checkIn: stay ? stay.checkIn : null,
+      checkOut: stay ? stay.checkOut : null,
+      stayNights: stay ? stay.stayNights : null,
+      totalPayment: stay ? stay.totalPayment : null,
+      confirmedAt: stay ? stay.confirmedAt : null,
+      nights: 0,
+      revenue: 0
+    };
+    guestMap.set(key, entry);
+  }
   entry.nights += 1;
   entry.revenue += revenue;
-  if (stay && !entry.invoiceNumbers.includes(stay.invoiceNumber)) {
-    entry.invoiceNumbers.push(stay.invoiceNumber);
-  }
-  guestMap.set(key, entry);
 }
 
-/** Highest-earning guest first, with the unattributed bucket (if any) pinned
- * last — it's a data gap to follow up on, not a result to rank. */
+/** Chronological by check-in — a report of who stayed when reads in date
+ * order — with the unattributed bucket pinned last, since it's a data gap to
+ * follow up on rather than a stay with a place in the sequence. */
 function finalizeGuests(guestMap) {
   return Array.from(guestMap.values())
     .map((g) => ({ ...g, commission: g.revenue * BOOKER_COMMISSION_RATE }))
     .sort((a, b) => {
       if (a.guestName === UNATTRIBUTED_GUEST) return 1;
       if (b.guestName === UNATTRIBUTED_GUEST) return -1;
-      return b.revenue - a.revenue;
+      return a.checkIn.localeCompare(b.checkIn);
     });
 }

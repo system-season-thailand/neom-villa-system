@@ -15,14 +15,14 @@ land on.
 The app produces **two** PDFs, both on this same engine:
 
 - the guest **invoice** — [`js/utils/pdfGenerator.js`](js/utils/pdfGenerator.js)
-- the Summary tab's **statement** — [`js/utils/statementGenerator.js`](js/utils/statementGenerator.js)
+- the Summary tab's **report** — [`js/utils/reportGenerator.js`](js/utils/reportGenerator.js)
 
 Everything they share — the document factory, page geometry, colours, and
 the whole Arabic-via-canvas path below — lives in
 [`js/utils/pdfCommon.js`](js/utils/pdfCommon.js). That split exists for one
 concrete reason: the Arabic handling is subtle enough (see below) that
 duplicating it would eventually mean an Arabic guest name rendering
-correctly on an invoice and incorrectly on a statement.
+correctly on an invoice and incorrectly on a report.
 
 ## Generation workflow
 
@@ -91,7 +91,7 @@ by `index.html` for the app's own Arabic UI text — and returns a PNG data
 URL sized in PDF millimeters, ready for `doc.addImage()`. `drawText()` and
 the `didParseCell`/`didDrawCell` autoTable hooks returned by `tableHooks()`
 route Arabic strings through this instead of `doc.text()`; everything else
-on the invoice — and on the statement — is still pure vector.
+on the invoice — and on the report — is still pure vector.
 
 **Trade-off, stated plainly:** the Arabic guest name (or an Arabic season
 note) is a small embedded image, not selectable/searchable text, inside an
@@ -202,33 +202,59 @@ one.)
 This only changes what staff and guests *see* on the file — the database's
 own revision numbering, and every in-app list that reads it, is untouched.
 
-## The Summary statement
+## The Summary report
 
-`generateSummaryStatementPdf({ from, to, rangeLabel, data })` in
-[`js/utils/statementGenerator.js`](js/utils/statementGenerator.js) renders
-the ملخص (Summary) tab's current view as a single document: the six headline
-figures, the By Booker table, each booker's own per-guest detail (the same
-data behind the tab's "More Details" expansions), and the By Month
-gross/net table.
+`generateSummaryReportPdf({ from, to, data })` in
+[`js/utils/reportGenerator.js`](js/utils/reportGenerator.js) renders the
+ملخص (Summary) tab's current period as a single document: the headline
+figures — three rows that each answer one question (what the villa sold,
+what comes out of that revenue, what it didn't sell) — then
+**one date-ordered table covering every night in the period** —
+each guest's stay (guest, booker, check-in, check-out, nights, total payment,
+and the date the booking was first confirmed) interleaved with the spans the
+villa sat empty between them.
 
-Two things about it are deliberate:
+Five things about it are deliberate:
 
 - **It takes data, not a date range.** `data` is the exact
   `getBookingSummary()` result the tab already fetched and is displaying, so
-  generating a statement runs no additional query and the document can never
-  disagree with the tables it was generated from. Same purity as
+  generating a report runs no additional query and the document can never
+  disagree with the tab it was generated from. Same purity as
   `generateInvoicePdf()` — data in, `Blob` out, no Supabase.
-- **Nothing is stored.** Like invoices, statements are regenerated on demand
-  rather than kept as files (see `DATABASE.md` → "Why no Storage bucket"),
-  and a statement has even less reason to be stored: it's a view of live
-  booking data, not a record issued to a guest.
+- **Every date appears exactly once, and the rows tile.** One row's
+  check-out is the next row's check-in, so the period can be read straight
+  down the table with no arithmetic — a stay, then however long the villa
+  stood empty, then the next stay. `buildTimeline()` in `summaryService.js`
+  produces that sequence; `Total Nights Sold` + `Empty Dates` always equals
+  the number of days in the period. Booked nights that no invoice covers are
+  their own kind of row rather than being folded into the empty spans —
+  they *are* occupied, they just have no guest, dates or payment of their
+  own. Unbooked spans print in red (and italic, so the distinction survives
+  greyscale), as does the `Empty Dates` figure that counts them: unsold
+  nights are what a reader scans this table to find.
+- **Guest rows are the invoice's view, the totals panel is the calendar's.**
+  A guest row shows the whole stay as billed, even where it runs past either
+  end of the period; the panel above is computed per booked night *inside*
+  the period, at that night's rate. The two answer different questions and
+  are not expected to tally — see the note above `drawGuestSections()`.
+- **It names its own period.** A range covering exactly one whole calendar
+  month is titled by that month ("October 2026"), anything else by its two
+  end dates; the file name follows the same rule
+  (`NEOM VILLA REPORT OCTOBER 2026.pdf`). The caller passes no label.
+- **It repeats the tab's pricing caveat.** When any booked night in the
+  period has no pricing rule, those nights count toward nights but
+  contribute nothing to revenue. The tab flags that in amber; without the
+  same line on the page, the PDF would present an understated Total Revenue
+  as final — the one way this document could actively mislead someone.
 
-The file name is the range itself — `NEOM VILLA STATEMENT 1 SEP 2026 - 30
-SEP 2026.pdf` — since there's no statement number to key off.
+**Nothing is stored.** Like invoices, reports are regenerated on demand
+rather than kept as files (see `DATABASE.md` → "Why no Storage bucket"), and
+a report has even less reason to be stored: it's a view of live booking
+data, not a record issued to a guest.
 
 Page breaks are handled two ways: `autoTable` splits a long table across
 pages by itself (repeating its header row), while the fixed-height pieces
-around the tables — section titles and each booker's own heading — go
+around the tables — the section title and each booker's own heading — go
 through `ensureSpace()`, so a heading is never stranded alone at the foot of
 a page. Page footers are drawn last, once every section is laid out, so
 "Page 1 of N" reports the real final count rather than a guess made while

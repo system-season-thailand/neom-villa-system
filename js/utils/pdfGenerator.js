@@ -8,7 +8,7 @@
 // via the browser's own text engine onto a canvas and embedded as a small
 // image, rather than drawn as PDF vector text. That machinery — along with
 // the document factory, colors, and page geometry — is shared with the
-// Summary tab's statement (statementGenerator.js) and lives in pdfCommon.js.
+// Summary tab's report (reportGenerator.js) and lives in pdfCommon.js.
 import { formatDisplayDate } from './dateUtils.js';
 import { formatIDR, formatNumber } from './format.js';
 import { containsArabic } from './arabicReshaper.js';

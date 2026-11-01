@@ -12,7 +12,7 @@ minimal clicks, maximum automation.
 | Invoice | فاتورة | Create guest invoices with automatic pricing, export vector-quality PDFs, and browse/restore past revisions. |
 | Prices | اسعار | Manage seasonal nightly rates used automatically by the Invoice tab. |
 | Availability | توافرات | A calendar of booking status per date, with past dates automatically marked Passed. |
-| Summary | ملخص | Nights, revenue and payout splits for any date range — per booker (with a per-guest breakdown), per month, and as a downloadable statement PDF. |
+| Summary | ملخص | Nights, revenue and payout splits for any date range — per booker (with a per-guest breakdown), per month, and as a downloadable report PDF. |
 
 It's a plain HTML/CSS/JavaScript static site — no framework, no bundler, no
 build step. Third-party libraries (Supabase JS, jsPDF, jsPDF-AutoTable) are
@@ -106,7 +106,7 @@ identically if you ever move off GitHub Pages.
 │       ├── dbErrors.js              Friendly messages for Postgres error codes
 │       ├── pdfCommon.js             Shared jsPDF plumbing: document factory, page/colour constants, canvas-rendered Arabic
 │       ├── pdfGenerator.js          Builds the invoice PDF (jsPDF vector text + canvas-rendered Arabic)
-│       ├── statementGenerator.js    Builds the Summary tab's statement PDF for the range on screen
+│       ├── reportGenerator.js       Builds the Summary tab's report PDF for the period on screen
 │       └── arabicReshaper.js        containsArabic() — routes Arabic strings to canvas rendering
 │
 ├── assets/

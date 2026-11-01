@@ -106,6 +106,33 @@ popover, or a passed date's "Passed" revert option, works by deleting the
 row outright (see `clearStatus()` / `setStatus()`) rather than writing
 either value into it.
 
+Alongside `byBooker`, the result carries a flat **`timeline`** and an
+**`emptyNights`** count, which is what the report PDF prints.
+`buildTimeline()` walks the period night by night and emits one row per
+contiguous run, so every date belongs to exactly one row and consecutive
+rows tile (each row's `end` is the next row's `start`, using the same
+checkout-exclusive convention as a stay):
+
+| `kind` | What it covers | Dates reported |
+|---|---|---|
+| `stay` | consecutive booked nights under one invoice | the **invoice's** own check-in/check-out, so a stay running past either end of the period is shown as the guest was billed for it |
+| `unattributed` | consecutive booked nights by one booker that no invoice covers | the run's own bounds — these are genuinely occupied and must never be reported as empty |
+| `empty` | consecutive nights with no booking at all | the run's own bounds |
+
+"Empty" here means simply *not booked*: a date carrying `on_hold` or
+`blocked` counts as empty, since `getBookingSummary()` only ever reads rows
+with `status = 'booked'`. `totalNights + emptyNights` therefore always
+equals the number of days in the selected period.
+
+`emptyNightsValue` is what those unbooked nights **would** have been worth at
+their own nightly rates — revenue *not* earned, and deliberately never added
+to `totalRevenue`. An unbooked night that no pricing rule covers can't be
+valued at all, so it contributes nothing and is counted in
+`emptyMissingPriceNights` instead, mirroring how `missingPriceNights` already
+handles an unpriced *booked* night: under-report and say so rather than guess
+a rate. The report prints both counts as a caveat line whenever either is
+non-zero.
+
 A date that *does* have a stored row keeps its real status even once it's in
 the past — `getStatusesInRange()` never overwrites it to `'passed'`. The
 Availability tab (admin view) labels such a date "Passed & Booked" (or
@@ -355,11 +382,25 @@ only the per-guest detail comes up empty.
 
 This is a read-only report — it has no write path of its own, and doesn't
 change how `neom_availability`/`neom_price`/`neom_pdf` are used anywhere
-else. The whole result also feeds the tab's **Download Statement PDF**
-button, which renders the range currently on screen — totals, By Booker, the
-per-guest detail, and By Month — via `js/utils/statementGenerator.js`,
-built from the same already-fetched data so the document can never disagree
-with the tables it came from.
+else. The whole result also feeds the tab's **Download Report PDF** button,
+which renders the period currently on screen — the headline totals, then
+every guest grouped under the staff member who booked them — via
+`js/utils/reportGenerator.js`, built from the same already-fetched data so
+the document can never disagree with the tab it came from.
+
+Each guest entry therefore carries two night counts that answer different
+questions, and both are needed: `nights` is how many booked calendar nights
+*inside the selected range* were attributed to that stay (what the tab's
+revenue and commission are computed from), while `stayNights`,
+`totalPayment`, `checkIn` and `checkOut` are the invoice's own account of
+the whole stay — which is what the report prints, since a check-in and
+check-out date clipped to the period's edges would misrepresent what the
+guest was actually billed for. `confirmedAt` is the `created_at` of that
+invoice's **first** revision: a booking was confirmed when it was first
+invoiced, not when someone later corrected a typo in it. Entries are keyed
+by invoice number rather than guest name, so a guest who stayed twice in one
+period reads as two rows instead of one row with two sets of dates collapsed
+into it.
 
 ## Row Level Security
 

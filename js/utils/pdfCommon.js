@@ -1,6 +1,6 @@
 // Shared jsPDF plumbing used by every PDF this app produces — the guest
 // invoice (pdfGenerator.js) and the Summary tab's statement
-// (statementGenerator.js).
+// (reportGenerator.js).
 //
 // This module exists because both documents need the exact same two
 // non-obvious things: a document factory that fails loudly when the CDN
@@ -20,6 +20,12 @@ export const COLOR_MUTED = [110, 114, 122];
 export const COLOR_ACCENT = [181, 98, 47];
 export const COLOR_BORDER = [225, 227, 231];
 export const COLOR_SURFACE = [247, 247, 248];
+// Matches --warning in css/base.css, so a caveat reads the same on paper as
+// it does on screen.
+export const COLOR_WARNING = [179, 121, 12];
+// Matches --danger in css/base.css. Used to make an absence impossible to
+// miss — the report's unbooked spans — not to signal an error.
+export const COLOR_DANGER = [193, 64, 44];
 
 const MM_PER_PT = 25.4 / 72;
 // Render at a high internal resolution so the embedded image stays crisp
@@ -167,15 +173,25 @@ export function columnAlign(index, columnCount) {
  * `columnCount` and leave `halign` out of `columnStyles` entirely — use that
  * for widths, weights and colours only.
  *
- * **2. Arabic rendered via canvas** — see renderArabicToImage() above for
+ * **2. Per-row styling.** `rowStyle(bodyRowIndex)` may return style overrides
+ * (`textColor`, `fontStyle`, …) to apply across a whole row — for rows that
+ * describe an absence rather than a record, such as the report's unbooked
+ * spans. It lives in the hook for the same reason the alignment does: per-row
+ * styling has nowhere else to go once `didParseCell` is taken.
+ *
+ * **3. Arabic rendered via canvas** — see renderArabicToImage() above for
  * the why. The image is placed to match whatever alignment the column
  * resolved to, so an Arabic value lines up under its header exactly like a
  * Latin one does.
  */
-export function tableHooks({ columnCount, sizePt = 9.5, color = COLOR_INK } = {}) {
+export function tableHooks({ columnCount, sizePt = 9.5, color = COLOR_INK, rowStyle } = {}) {
   return {
     didParseCell(data) {
       data.cell.styles.halign = columnAlign(data.column.index, columnCount);
+
+      if (data.section === 'body') {
+        Object.assign(data.cell.styles, rowStyle?.(data.row.index) || {});
+      }
 
       if (data.section !== 'body') return;
       const text = Array.isArray(data.cell.raw) ? data.cell.raw.join(' ') : data.cell.raw;

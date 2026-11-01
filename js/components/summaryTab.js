@@ -3,7 +3,7 @@ import { toast } from './toast.js';
 import { createDatePicker } from './datePicker.js';
 import { toISO, parseISO, monthLabel, formatDisplayDate } from '../utils/dateUtils.js';
 import { formatIDR } from '../utils/format.js';
-import { generateSummaryStatementPdf } from '../utils/statementGenerator.js';
+import { generateSummaryReportPdf } from '../utils/reportGenerator.js';
 
 const PRESETS = [
   { key: 'this_month', label: 'This Month' },
@@ -53,7 +53,7 @@ export function mount(container) {
     toSlot: container.querySelector('#summary-to-slot'),
     presetsRow: container.querySelector('#summary-presets'),
     refreshBtn: container.querySelector('#summary-refresh'),
-    statementBtn: container.querySelector('#btn-download-statement'),
+    reportBtn: container.querySelector('#btn-download-report'),
     totalNights: container.querySelector('#summary-total-nights'),
     totalRevenue: container.querySelector('#summary-total-revenue'),
     totalCommission: container.querySelector('#summary-total-commission'),
@@ -113,7 +113,7 @@ export function mount(container) {
   els.monthPrev.addEventListener('click', () => navigateMonth(-1));
   els.monthNext.addEventListener('click', () => navigateMonth(1));
   els.refreshBtn.addEventListener('click', () => load());
-  els.statementBtn.addEventListener('click', handleDownloadStatement);
+  els.reportBtn.addEventListener('click', handleDownloadReport);
 
   els.presetsRow.querySelectorAll('[data-preset]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -162,26 +162,6 @@ function navigateMonth(delta) {
 function updateMonthLabel() {
   const d = parseISO(state.from);
   els.monthLabel.textContent = monthLabel(d.getFullYear(), d.getMonth());
-}
-
-/** What to call the range currently on screen, for the statement PDF's
- * header — the preset's own name when the range is exactly one ("This
- * Month", "All Time"), the month's name for a clean single month, and
- * otherwise nothing to add beyond the exact from/to dates the PDF already
- * prints. */
-function currentRangeLabel() {
-  const preset = PRESETS.find((p) => {
-    const r = rangeForPreset(p.key);
-    return r.from === state.from && r.to === state.to;
-  });
-  if (preset) return preset.label;
-
-  const d = parseISO(state.from);
-  const asMonth = monthRange(d.getFullYear(), d.getMonth());
-  if (asMonth.from === state.from && asMonth.to === state.to) {
-    return monthLabel(d.getFullYear(), d.getMonth());
-  }
-  return '';
 }
 
 let loadDebounce = null;
@@ -236,31 +216,30 @@ async function load() {
 }
 
 /**
- * Builds the statement from exactly what's on screen — `state.data` is the
+ * Builds the report from exactly what's on screen — `state.data` is the
  * result already fetched and rendered for the current range, so the PDF can
  * never disagree with the tables it was generated from, and no extra query
  * runs to produce it.
  */
-async function handleDownloadStatement() {
+async function handleDownloadReport() {
   if (state.loading || !state.data) {
     toast.warning('Still loading this range — try again in a moment.');
     return;
   }
   if (!state.data.totalNights) {
-    toast.error('There are no bookings in this range to put on a statement.');
+    toast.error('There are no bookings in this range to put on a report.');
     return;
   }
 
   setDownloading(true);
   try {
-    const { blob, fileName } = await generateSummaryStatementPdf({
+    const { blob, fileName } = await generateSummaryReportPdf({
       from: state.from,
       to: state.to,
-      rangeLabel: currentRangeLabel(),
       data: state.data
     });
     triggerBrowserDownload(blob, fileName);
-    toast.success('Statement downloaded.');
+    toast.success('Report downloaded.');
   } catch (err) {
     toast.error(err.message);
   } finally {
@@ -270,8 +249,8 @@ async function handleDownloadStatement() {
 
 function setDownloading(isDownloading) {
   state.downloading = isDownloading;
-  els.statementBtn.classList.toggle('is-loading', isDownloading);
-  els.statementBtn.disabled = isDownloading || state.loading || !state.data?.totalNights;
+  els.reportBtn.classList.toggle('is-loading', isDownloading);
+  els.reportBtn.disabled = isDownloading || state.loading || !state.data?.totalNights;
 }
 
 function triggerBrowserDownload(blob, fileName) {
@@ -399,8 +378,8 @@ function renderGuestName(guest) {
   if (!guest.guestName) {
     return `<span class="summary-guest-unmatched">No matching invoice</span>`;
   }
-  const invoices = guest.invoiceNumbers.length
-    ? `<span class="summary-guest-invoice">${escapeHtml(guest.invoiceNumbers.join(', '))}</span>`
+  const invoices = guest.invoiceNumber
+    ? `<span class="summary-guest-invoice">${escapeHtml(guest.invoiceNumber)}</span>`
     : '';
   return `<span class="summary-guest-name-cell"><span class="summary-guest-name" dir="auto">${escapeHtml(guest.guestName)}</span>${invoices}</span>`;
 }
@@ -549,7 +528,7 @@ function render() {
 
   els.refreshBtn.disabled = state.loading;
   els.refreshBtn.classList.toggle('is-loading', state.loading);
-  els.statementBtn.disabled = state.loading || state.downloading || !state.data?.totalNights;
+  els.reportBtn.disabled = state.loading || state.downloading || !state.data?.totalNights;
 
   if (state.loading) {
     const skeleton = `<div class="skeleton" style="height:36px;margin-bottom:8px;"></div><div class="skeleton" style="height:36px;"></div>`;
@@ -651,9 +630,9 @@ function template() {
   return `
     <div class="page">
       <div class="page-actions">
-        <button class="btn btn-primary" id="btn-download-statement" type="button" disabled>
+        <button class="btn btn-primary" id="btn-download-report" type="button" disabled>
           <span class="spinner"></span>
-          <span class="btn-label">Download Statement PDF</span>
+          <span class="btn-label">Download Report PDF</span>
         </button>
       </div>
 
